@@ -1,0 +1,3 @@
+
+# 04 Mean‑Revert Agent
+Detailed design, equations, entry/exit examples, parameter tables ...
