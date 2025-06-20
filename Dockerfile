@@ -1,18 +1,23 @@
-FROM python:3.11-slim
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim-bullseye
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# system deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git && \
-    rm -rf /var/lib/apt/lists/*
-
-# python deps
+# сначала только requirements.txt (чтобы слои кешировались)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
 
-# project
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip && \
+    pip install --only-binary=:all: --no-cache-dir "numpy<2.0" TA-Lib-Precompiled==0.4.25 && \
+    pip install --no-cache-dir -r requirements.txt
+
+# теперь всё остальное приложение
 COPY . .
 
-ENV PYTHONPATH=/app
+RUN pip install -e .
+
 CMD ["python", "-m", "adaptive_crypto_bot.run"]
