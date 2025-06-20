@@ -1,3 +1,0 @@
-
-# 05 VWAP‑Sweep Agent
-Full explanation of stop‑hunt pattern detection, CVD spike threshold, basis guard...
