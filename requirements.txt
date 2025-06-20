@@ -2,5 +2,5 @@ redis>=5.0.0
 pandas>=2.2.2
 numpy>=1.26.4
 aiohttp>=3.9.5
-ta-lib==0.4.28
+TA-Lib @ https://github.com/mrjbq7/ta-lib/archive/refs/heads/master.zip
 pytest
