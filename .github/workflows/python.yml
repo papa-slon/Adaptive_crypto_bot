@@ -12,11 +12,18 @@ jobs:
     services:
       redis:
         image: redis:7
+
+        image: redis:7-alpine
+
         ports:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
+
           --health-interval 10s
+
+          --health-interval 5s
+
           --health-timeout 5s
           --health-retries 5
 
@@ -33,7 +40,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install -e .
+
           pip install pytest
 
       - name: Run tests
         run: pytest -q
+
+
+      - name: Run tests
+        run: pytest -q
+

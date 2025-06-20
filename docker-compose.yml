@@ -1,16 +1,28 @@
-
 version: "3.9"
+
 services:
   redis:
     image: redis:7-alpine
-    restart: always
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
   bot:
-    build: .
-    environment:
-      - BINANCE_KEY=${BINANCE_KEY}
-      - BINANCE_SECRET=${BINANCE_SECRET}
-      - BINGX_KEY=${BINGX_KEY}
-      - BINGX_SECRET=${BINGX_SECRET}
-      - REDIS_HOST=redis
-    depends_on: [redis]
-    restart: always
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: adaptive_bot
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    command: ["bash", "-c", "python -m adaptive_crypto_bot.run"]
+    restart: unless-stopped
+    volumes:
+      - ./logs:/app/logs
+
+volumes:
+  redis-data:
