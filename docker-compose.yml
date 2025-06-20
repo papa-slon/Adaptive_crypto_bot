@@ -1,0 +1,16 @@
+
+version: "3.9"
+services:
+  redis:
+    image: redis:7-alpine
+    restart: always
+  bot:
+    build: .
+    environment:
+      - BINANCE_KEY=${BINANCE_KEY}
+      - BINANCE_SECRET=${BINANCE_SECRET}
+      - BINGX_KEY=${BINGX_KEY}
+      - BINGX_SECRET=${BINGX_SECRET}
+      - REDIS_HOST=redis
+    depends_on: [redis]
+    restart: always

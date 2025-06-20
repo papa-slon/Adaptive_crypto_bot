@@ -1,0 +1,8 @@
+
+risk:
+  max_margin: 0.55
+  dayloss: -0.08
+  dd_limit: -0.25
+endpoints:
+  binance_ws: "wss://stream.binance.com:9443"
+  bingx_ws: "wss://open-api.bingx.com/market"
