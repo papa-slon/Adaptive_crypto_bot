@@ -1,15 +1,5 @@
 version: "3.9"
-
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    restart: unless-stopped
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-
   bot:
     build:
       context: .
@@ -17,12 +7,33 @@ services:
     container_name: adaptive_bot
     env_file:
       - .env
-    depends_on:
-      - redis
+    depends_on: []
     command: ["bash", "-c", "python -m adaptive_crypto_bot.run"]
     restart: unless-stopped
     volumes:
       - ./logs:/app/logs
-
+    links: []
+    environment:
+      PYTHONPATH: /app
+      REDIS_HOST: redis
+    healthcheck:
+      test:
+        - CMD
+        - /docker/healthcheck.sh
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --save
+      - "60"
+      - "1"
+      - --loglevel
+      - warning
+    volumes:
+      - redis-data:/data
 volumes:
-  redis-data:
+  redis-data: {}
