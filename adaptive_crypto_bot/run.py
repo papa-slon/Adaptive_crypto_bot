@@ -1,4 +1,5 @@
-# python -m adaptive_crypto_bot.run → точка входа Docker
-from adaptive_crypto_bot.cli import cli
+# docker ENTRYPOINT
+from adaptive_crypto_bot.cli import main
+
 if __name__ == "__main__":
-    cli()         # click auto-dispatch
+    main()
