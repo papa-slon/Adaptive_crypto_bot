@@ -13,3 +13,4 @@ click>=8.1
 aiohttp>=3.9
 pytest>=8.0
 pytest-asyncio>=0.23
+aiohttp>=3.9
