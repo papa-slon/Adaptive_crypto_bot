@@ -19,3 +19,4 @@ httpx[http2]>=0.27
 cryptography>=42.0
 fastapi>=0.111
 uvicorn[standard]>=0.29
+backoff>=2.2
