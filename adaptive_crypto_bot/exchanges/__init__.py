@@ -1,15 +1,15 @@
-"""Мэппинг названия биржи → клиентского класса."""
+"""Реестр REST-клиентов конкретных бирж."""
 from __future__ import annotations
-from importlib import import_module
-from functools  import lru_cache
+from typing import Dict, Type
 
-_MAPPING = {
-    "BINANCE": ("adaptive_crypto_bot.exchanges.binance", "BinanceREST"),
-    "BINGX"  : ("adaptive_crypto_bot.exchanges.bingx"  , "BingxREST"),
+from adaptive_crypto_bot.exchanges.binance import BinanceREST
+# 👉 при появлении новых бирж просто импортируем здесь
+# from adaptive_crypto_bot.exchanges.bingx   import BingXREST
+
+REST_CLIENTS: Dict[str, Type[BinanceREST]] = {
+    "BINANCE": BinanceREST,
+    # "BINGX":  BingXREST,
 }
 
-@lru_cache
 def get_client(name: str):
-    mod_path, cls_name = _MAPPING[name.upper()]
-    mod = import_module(mod_path)
-    return getattr(mod, cls_name)()        # type: ignore[return-value]
+    return REST_CLIENTS[name.upper()]

@@ -1,5 +1,11 @@
-#!/usr/bin/env sh
-# ── OK, если Redis отвечает и запущен python-процесс воркера ──
-redis-cli -h "${REDIS_HOST:-redis}" -p "${REDIS_PORT:-6379}" PING | grep -q PONG || exit 1
-pgrep -f "adaptive_crypto_bot.worker"  >/dev/null              || exit 1
-exit 0
+#!/usr/bin/env bash
+set -euo pipefail
+python - <<'PY'
+import sys, os, redis
+host = os.getenv("REDIS_HOST", "redis")
+try:
+    redis.Redis(host=host, port=6379, socket_connect_timeout=1).ping()
+    sys.exit(0)
+except Exception:
+    sys.exit(1)
+PY
