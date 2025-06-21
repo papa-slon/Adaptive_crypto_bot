@@ -1,25 +1,10 @@
-"""Единая настройкаstructured-logging по всему приложению."""
-from __future__ import annotations
-import logging, sys
-from typing import Literal
+"""Единый формат логов."""
+import logging, os, sys
+from adaptive_crypto_bot.config import get_settings
 
-_LEVELS: dict[str, int] = {
-    "TRACE": 5, "DEBUG": 10, "INFO": 20,
-    "WARNING": 30, "ERROR": 40, "CRITICAL": 50,
-}
-logging.addLevelName(5, "TRACE")                 # type: ignore[arg-type]
+_FMT = "%(asctime)s %(levelname)s %(name)s | %(message)s"
 
-def _add_trace() -> None:
-    def trace(self: logging.Logger, msg, *a, **kw):  # noqa: ANN001
-        if self.isEnabledFor(5):
-            self._log(5, msg, a, **kw)          # type: ignore[attr-defined]
-    logging.Logger.trace = trace                # type: ignore[misc]
-
-_add_trace()
-
-def setup(level: Literal[*_LEVELS.keys(), int] = "INFO") -> logging.Logger:
-    lvl = _LEVELS.get(str(level).upper(), int(level))
-    fmt = "[%(asctime)s] %(levelname)-8s %(name)s | %(message)s"
-    logging.basicConfig(stream=sys.stdout, level=lvl,
-                        format=fmt, datefmt="%H:%M:%S", force=True)
-    return logging.getLogger("bot")
+def setup(name: str | None = None) -> logging.Logger:
+    lvl = getattr(logging, get_settings().LOG_LEVEL.upper(), logging.INFO)
+    logging.basicConfig(level=lvl, format=_FMT, stream=sys.stdout, force=True)
+    return logging.getLogger(name or "bot")
