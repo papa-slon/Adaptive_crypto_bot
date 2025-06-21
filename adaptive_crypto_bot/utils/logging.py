@@ -1,10 +1,18 @@
-"""Единый формат логов."""
+"""Единая точка конфигурации логирования для всех модулей пакета."""
+from __future__ import annotations
 import logging, os, sys
-from adaptive_crypto_bot.config import get_settings
+from functools import lru_cache
 
-_FMT = "%(asctime)s %(levelname)s %(name)s | %(message)s"
+_FMT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+_DATEFMT = "%H:%M:%S"
 
+@lru_cache
 def setup(name: str | None = None) -> logging.Logger:
-    lvl = getattr(logging, get_settings().LOG_LEVEL.upper(), logging.INFO)
-    logging.basicConfig(level=lvl, format=_FMT, stream=sys.stdout, force=True)
-    return logging.getLogger(name or "bot")
+    level = os.getenv("LOG_LEVEL", "INFO").upper()
+    logging.basicConfig(
+        level   = level,
+        format  = _FMT,
+        datefmt = _DATEFMT,
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
+    return logging.getLogger(name or __name__)
