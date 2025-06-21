@@ -1,29 +1,31 @@
-"""Воркер: читает Redis-Stream с тиками и передаёт их стратегии."""
-import asyncio, json, logging, redis.asyncio as redis         # type: ignore
-from adaptive_crypto_bot.config import get_settings
-from adaptive_crypto_bot.strategy.echo import EchoStrategy
+"""Worker-консьюмер: Redis → стратегия (DCA)."""
+import asyncio, redis.asyncio as redis          # type: ignore
+from adaptive_crypto_bot.config   import get_settings
 from adaptive_crypto_bot.utils.logging import setup
+from adaptive_crypto_bot.strategy.dca import DCAStrategy
+from adaptive_crypto_bot.services.executor import Executor
 
 log = setup()
 S   = get_settings()
 
-class DummySink:
-    async def send(self, order): log.debug("ORDER %s", order)
+GROUP   = "bot"
+CONSUMER= "worker-1"
 
-async def main() -> None:
-    r  = redis.Redis(host=S.REDIS_HOST, port=S.REDIS_PORT, decode_responses=True)
-    st = EchoStrategy(DummySink())
-    last_id = "$"
+async def main():
+    r = redis.Redis(host=S.REDIS_HOST, port=S.REDIS_PORT, decode_responses=True)
+    try:
+        await r.xgroup_create(name=S.REDIS_STREAM, groupname=GROUP, id="0-0", mkstream=True)
+    except redis.ResponseError:
+        pass  # group exists
+
+    strat = DCAStrategy(Executor("BINANCE"))
 
     while True:
-        resp = await r.xread({S.REDIS_STREAM: last_id}, block=15_000, count=100)
+        resp = await r.xreadgroup(GROUP, CONSUMER, streams={S.REDIS_STREAM: ">"}, count=100, block=5000)
         if not resp: continue
-        for _, entries in resp:
-            for _id, kv in entries:
-                last_id = _id
-                tick = {k: json.loads(v) if v.replace('.','',1).isdigit() else v
-                        for k, v in kv.items()}
-                await st.on_tick(tick)
+        _, msgs = resp[0]
+        ticks = [m[1] for m in msgs]
+        await strat.on_ticks(ticks)
 
 if __name__ == "__main__":
     asyncio.run(main())
