@@ -1,69 +1,84 @@
-"""Стратегия: базовый ордер + N «safety-order» по сетке.
+"""Very simple Dollar-Cost-Averaging strategy implementation.
 
 Алгоритм:
-1. При каждом новом тике обновляем last_price.
-2. Если нет активных слотов → ставим base-order (market/limit).
-3. Если есть открытые позиции -- ставим safety-orders ступенями ±X %.
-4. Контролируем MAX_SLOTS – не открываем новых, пока есть старые.
+1. Получаем тики из Redis-стрима.
+2. На каждом тике проверяем:
+   • нет позиции — ставим MARKET BUY base USDT
+   • есть позиция long:
+        если цена упала > X% от средней  ⇒ ставим MARKET BUY safety
+        если цена выросла > TP          ⇒ ставим MARKET SELL всё
+   • всё симметрично для short (не реализовано для краткости)
+Параметры берём из Settings.
 """
-
 from __future__ import annotations
-import asyncio, logging
-from dataclasses import dataclass, field
-from typing import List
+import asyncio, logging, math
+from collections import deque
+from typing import Deque, Callable, Awaitable
 
+from redis.asyncio import Redis
 from adaptive_crypto_bot.config import get_settings
-from adaptive_crypto_bot.core.models import Tick, Side, Order
+from adaptive_crypto_bot.core.models import Tick, Position
 
-cfg = get_settings()
-_LOG = logging.getLogger("strategy")
+settings = get_settings()
+log      = logging.getLogger(__name__)
 
-# ─────────── dataclass для слота - хранит context позиции ───────────
-@dataclass
-class Slot:
-    base_order: Order
-    safety_orders: List[Order] = field(default_factory=list)
+SAFETY_TRIGGER = 1.5 / 100        # 1.5 %
+TAKE_PROFIT    = 2.0 / 100        # 2 %
+
 
 class DcaStrategy:
-    def __init__(self) -> None:
-        self.slots: List[Slot] = []
-        self.last_price: float = 0.0
+    def __init__(
+        self,
+        redis: Redis,
+        exec_order: Callable[[str, str, float], Awaitable[None]],  # exec(symbol, side, usdt)
+    ):
+        self.r            = redis
+        self.exec_order   = exec_order
+        self.position: Position | None = None
+        self.recent: Deque[float] = deque(maxlen=20)
 
-    # ── интерфейс для main-loop ───────────────────────────────────────────────
-    async def on_tick(self, tick: Tick, executor) -> None:
-        self.last_price = tick.price
+    # ───────────────────────── helpers ──────────────────────────
+    def _avg(self) -> float:
+        return sum(self.recent) / len(self.recent)
 
-        # 1. закрываем заполненные слоты
-        self.slots = [s for s in self.slots if s.base_order.status != "FILLED"]
+    # ───────────────────── main event-loop ──────────────────────
+    async def run(self):
+        log.info("DCA-strategy started")
+        last_id = "0-0"
+        while True:
+            result = await self.r.xread({settings.REDIS_STREAM: last_id}, block=5000, count=100)
+            if not result:
+                continue
+            _, entries = result[0]
+            for eid, data in entries:
+                last_id = eid
+                tick = Tick.model_validate(data)
+                self.recent.append(tick.price)
+                await self._on_tick(tick)
 
-        # 2. можно ли создать новый?
-        if len(self.slots) < cfg.MAX_SLOTS:
-            await self._maybe_open_slot(executor)
+    async def _on_tick(self, t: Tick):
+        if not self.position:
+            # no active position, open new slot
+            await self.exec_order(settings.SYMBOL, "BUY", settings.BASE_ORDER_USDT)
+            self.position = Position(symbol=settings.SYMBOL, entry=t.price, qty=settings.BASE_ORDER_USDT / t.price, side="long")
+            log.info("Opened new position @ %.2f", t.price)
+            return
 
-        # 3. апдейт safety-orders
-        await self._manage_safety_orders(executor)
+        # update unrealised pnl
+        self.position.unreal_pnl = (t.price - self.position.entry) / self.position.entry
 
-    # ─────────── helpers ──────────────────────────────────────────────────────
-    async def _maybe_open_slot(self, executor):
-        qty  = cfg.BASE_ORDER_USDT / self.last_price
-        order = await executor.place_order(Side.BUY, qty, self.last_price * 0.999)
-        slot  = Slot(base_order=order)
-        self.slots.append(slot)
-        _LOG.info("New slot opened @$%.2f", order.price)
+        # safety order?
+        drawdown = (self.position.entry - t.price) / self.position.entry
+        if drawdown > SAFETY_TRIGGER and self.position.qty < settings.MAX_SLOTS * settings.SAFETY_ORDER_USDT / t.price:
+            await self.exec_order(settings.SYMBOL, "BUY", settings.SAFETY_ORDER_USDT)
+            new_qty   = self.position.qty + settings.SAFETY_ORDER_USDT / t.price
+            new_entry = (self.position.entry * self.position.qty + t.price * (settings.SAFETY_ORDER_USDT / t.price)) / new_qty
+            self.position.qty, self.position.entry = new_qty, new_entry
+            log.info("Safety order executed, new avg %.2f", new_entry)
+            return
 
-    async def _manage_safety_orders(self, executor):
-        for slot in self.slots:
-            # если base-order заполнен & нет safety-ов → ставим первый
-            if slot.base_order.status == "FILLED" and not slot.safety_orders:
-                await self._place_safety(slot, executor)
-            # если есть исполненный safety → ставим следующий
-            if slot.safety_orders and slot.safety_orders[-1].status == "FILLED":
-                await self._place_safety(slot, executor)
-
-    async def _place_safety(self, slot: Slot, executor):
-        step_pct = 0.5  # каждая ступень 0.5 %
-        target_px = slot.base_order.price * (1 - step_pct * (1 + len(slot.safety_orders)))
-        qty = cfg.SAFETY_ORDER_USDT / target_px
-        order = await executor.place_order(Side.BUY, qty, target_px)
-        slot.safety_orders.append(order)
-        _LOG.info("Safety order #%d @$%.2f", len(slot.safety_orders), order.price)
+        # take-profit?
+        if self.position.unreal_pnl >= TAKE_PROFIT:
+            await self.exec_order(settings.SYMBOL, "SELL", self.position.qty * t.price)
+            log.info("TP hit (%.2f%%), closing position", self.position.unreal_pnl * 100)
+            self.position = None
