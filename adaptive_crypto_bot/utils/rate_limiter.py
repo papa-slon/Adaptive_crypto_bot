@@ -1,56 +1,46 @@
-"""
-adaptive_crypto_bot/utils/rate_limiter.py
-
-Асинхронный «token-bucket» для контроля частоты HTTP/WS-запросов.
-
-▪ rps — «requests-per-second» (ёмкость в токенах).
-▪ `acquire()` блокирует корутину, пока не появится свободный токен.
-▪ Потокобезопасен для множества concurrent `await`'ов.
-"""
-
-from __future__ import annotations
+"""Асинхронный токен-бакет (очень лёгкий)."""
 
 import asyncio
-import time
+from contextlib import asynccontextmanager
+from time import monotonic
 
+class AsyncRateLimiter:
+    def __init__(self, rate: int, per: float = 1.0) -> None:
+        self._rate = rate
+        self._per  = per
+        self._tokens = rate
+        self._last   = monotonic()
+        self._lock   = asyncio.Lock()
 
-class RateLimiter:
-    """Token-bucket с support `async with`."""
-
-    MIN_SLEEP = 0.05  # 50 мс, чтобы не жечь CPU при плотном цикле
-
-    def __init__(self, rps: int) -> None:
-        if rps <= 0:
-            raise ValueError("rps must be > 0")
-        self._capacity: float = float(rps)
-        self._tokens:   float = float(rps)
-        self._last_refill: float = time.monotonic()
-        self._lock = asyncio.Lock()
-
-    # ──────────────────────────────── API ────────────────────────────────
-    async def acquire(self) -> None:
-        """Блокируется, пока в «ведре» не окажется ≥ 1 токена."""
+    async def _take(self) -> None:
         async with self._lock:
-            while True:
-                now = time.monotonic()
-                delta = now - self._last_refill
-                self._last_refill = now
+            now = monotonic()
+            delta = now - self._last
+            # докапываем токены
+            self._tokens = min(self._rate, self._tokens + delta * (self._rate / self._per))
+            self._last = now
+            # ждём, пока появится хотя бы 1 токен
+            while self._tokens < 1:
+                await asyncio.sleep(self._per / self._rate)
+                now = monotonic()
+                delta = now - self._last
+                self._tokens = min(self._rate, self._tokens + delta * (self._rate / self._per))
+                self._last = now
+            self._tokens -= 1
 
-                # «доливаем» токены со скоростью rps/сек, но не переливаем
-                self._tokens = min(self._capacity,
-                                   self._tokens + delta * self._capacity)
-
-                if self._tokens >= 1.0:
-                    self._tokens -= 1.0
-                    return
-
-                await asyncio.sleep(self.MIN_SLEEP)
-
-    # — enable `async with limiter:` —
-    async def __aenter__(self):  # noqa: D401
-        await self.acquire()
+    async def __aenter__(self):
+        await self._take()
         return self
 
-    async def __aexit__(self, *_exc):
-        # nothing to cleanup
+    async def __aexit__(self, exc_type, exc, tb):
         return False
+
+# alias for `async with limiter:`
+@asynccontextmanager
+async def limit(rate: int, per: float = 1.0):
+    rl = AsyncRateLimiter(rate, per)
+    await rl._take()
+    try:
+        yield
+    finally:
+        pass
