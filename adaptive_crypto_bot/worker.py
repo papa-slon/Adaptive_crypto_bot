@@ -1,31 +1,29 @@
-"""Entry-point that wires everything together and runs the strategy loop."""
-import asyncio, logging, signal, sys
-from redis.asyncio import Redis
+"""Воркер: читает Redis-Stream с тиками и передаёт их стратегии."""
+import asyncio, json, logging, redis.asyncio as redis         # type: ignore
+from adaptive_crypto_bot.config import get_settings
+from adaptive_crypto_bot.strategy.echo import EchoStrategy
+from adaptive_crypto_bot.utils.logging import setup
 
-from adaptive_crypto_bot.config         import get_settings
-from adaptive_crypto_bot.utils.logging_config import setup_logging
-from adaptive_crypto_bot.core.strategy  import DcaStrategy
-from adaptive_crypto_bot.core.executor  import OrderExecutor
+log = setup()
+S   = get_settings()
 
-settings = get_settings()
-setup_logging(settings.LOG_LEVEL)
-log = logging.getLogger(__name__)
+class DummySink:
+    async def send(self, order): log.debug("ORDER %s", order)
 
+async def main() -> None:
+    r  = redis.Redis(host=S.REDIS_HOST, port=S.REDIS_PORT, decode_responses=True)
+    st = EchoStrategy(DummySink())
+    last_id = "$"
 
-async def main():
-    async with OrderExecutor("binance") as ex:
-        r  = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, decode_responses=True)
-        strat = DcaStrategy(r, ex.market)
-
-        # graceful shutdown
-        stop = asyncio.Future()                        # type: ignore
-
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            asyncio.get_running_loop().add_signal_handler(sig, stop.set_result, None)
-
-        await asyncio.gather(strat.run(), stop)
-        await r.close()
-
+    while True:
+        resp = await r.xread({S.REDIS_STREAM: last_id}, block=15_000, count=100)
+        if not resp: continue
+        for _, entries in resp:
+            for _id, kv in entries:
+                last_id = _id
+                tick = {k: json.loads(v) if v.replace('.','',1).isdigit() else v
+                        for k, v in kv.items()}
+                await st.on_tick(tick)
 
 if __name__ == "__main__":
     asyncio.run(main())

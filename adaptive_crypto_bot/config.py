@@ -60,3 +60,12 @@ def get_settings() -> Settings:
     """Кэшируем инстанс, чтобы не создавать его в каждом модуле."""
     return Settings()
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+@lru_cache
+def get_settings() -> "Settings":          # 1 экз. на процесс
+    return Settings()
+
+# удобная «сейчас» для тайм-стемпов
+def now() -> int:
+    return int(time.time()*1000)

@@ -1,95 +1,70 @@
-"""Мини-клиент Binance SPOT (REST + WebSocket trade-stream).
-
-Документация:
-  • https://binance-docs.github.io/apidocs/spot/en/
-  • stream: wss://stream.binance.com:9443/ws/<symbolLower>@trade
-限制: 1200 req/min ⇒ 20 req/sec – держим лимит.
-"""
+"""Минимально-достаточный клиент Binance Spot."""
 from __future__ import annotations
-import aiohttp, asyncio, hmac, hashlib, time, logging, json, urllib.parse
-from typing import Dict, Any, AsyncGenerator, Optional
+import hmac, hashlib, time, aiohttp, json, logging, urllib.parse, asyncio
+from adaptive_crypto_bot.config import get_settings
+from adaptive_crypto_bot.utils.logging import setup
 
-from adaptive_crypto_bot.core.models import Tick, Side
-from adaptive_crypto_bot.utils.rate_limiter import AsyncRateLimiter
+log = setup()
+S   = get_settings()
 
-_LOG = logging.getLogger("binance")
+_BASE_URL = "https://api.binance.com"
+_WS_URL   = f"wss://stream.binance.com:9443/ws/{S.SYMBOL.lower()}@trade"
 
-BASE_REST = "https://api.binance.com"
-WS_TRADE  = "wss://stream.binance.com:9443/ws"
 
-class BinanceClient:
-    def __init__(self, api_key: str, secret: str, symbol: str = "BTCUSDT") -> None:
-        self.key  = api_key
-        self.sec  = secret.encode()
-        self.sym  = symbol.upper()
-        self.sess = aiohttp.ClientSession()
-        # 20 req/s
-        self.limiter = AsyncRateLimiter(20, 1.0)
+class BinanceREST:
+    """REST-часть Binance API (только то, что нужно боту)."""
+    def __init__(self) -> None:
+        self._s = aiohttp.ClientSession()
 
-    # ── подпись qs ────────────────────────────────────────────────────────────
-    def _sign(self, qs: str) -> str:
-        return hmac.new(self.sec, qs.encode(), hashlib.sha256).hexdigest()
-
-    async def _req(
-        self, method: str, path: str, params: Optional[Dict[str, Any]] = None, auth=False
-    ) -> Any:
-        params = params or {}
-        headers = {}
+    async def _req(self, method: str, path: str, auth: bool = False, **params) -> dict:
+        ts = int(time.time() * 1000)
+        params["timestamp"] = ts
+        q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None}, True)
+        headers: dict[str, str] = {}
         if auth:
-            params["timestamp"] = int(time.time() * 1000)
-            qs_no_sig = urllib.parse.urlencode(params, True)
-            params["signature"] = self._sign(qs_no_sig)
-            headers["X-MBX-APIKEY"] = self.key
-        url = f"{BASE_REST}{path}"
-        async with self.limiter:
-            async with self.sess.request(method, url, params=params, headers=headers) as r:
-                r.raise_for_status()
-                return await r.json()
+            sig = hmac.new(S.BINANCE_SECRET.encode(), q.encode(), hashlib.sha256).hexdigest()
+            q = f"{q}&signature={sig}"
+            headers["X-MBX-APIKEY"] = S.BINANCE_API_KEY
+        url = f"{_BASE_URL}{path}?{q}"
+        async with self._s.request(method, url, headers=headers) as r:
+            data = await r.json()
+            if r.status != 200:
+                raise RuntimeError(f"Binance error {data}")
+            return data
 
-    # ── PUBLIC ────────────────────────────────────────────────────────────────
-    async def ping(self) -> bool:
-        try:
-            await self._req("GET", "/api/v3/ping")
-            return True
-        except Exception as e:
-            _LOG.warning("Ping failed: %s", e)
-            return False
+    # ───── public helpers ─────
+    async def ping(self) -> dict:                     # healthcheck
+        return await self._req("GET", "/api/v3/ping")
 
-    # ── PRIVATE trade ops ─────────────────────────────────────────────────────-
-    async def create_order(
-        self, side: Side, qty: float, price: float
-    ) -> Dict[str, Any]:
-        data = dict(
-            symbol=self.sym,
-            side=side.value,
-            type="LIMIT",
-            quantity=f"{qty:.6f}",
-            price=f"{price:.2f}",
-            timeInForce="GTC",
-        )
-        return await self._req("POST", "/api/v3/order", data, auth=True)
-
-    async def cancel(self, order_id: str) -> Any:
+    async def new_order(self, side: str, qty: float, price: float | None = None):
+        typ = "LIMIT" if price else "MARKET"
         return await self._req(
-            "DELETE", "/api/v3/order", {"symbol": self.sym, "orderId": order_id}, auth=True
+            "POST", "/api/v3/order", True,
+            symbol=S.SYMBOL, side=side.upper(), type=typ,
+            quantity=qty, price=price, timeInForce="GTC" if price else None
         )
 
-    # ── WS trade-stream ───────────────────────────────────────────────────────
-    async def ticker_stream(self) -> AsyncGenerator[Tick, None]:
-        uri = f"{WS_TRADE}/{self.sym.lower()}@trade"
-        async with aiohttp.ClientSession() as sess:
-            async with sess.ws_connect(uri, heartbeat=60) as ws:
-                async for msg in ws:
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        continue
-                    d = json.loads(msg.data)
-                    yield Tick(
-                        ts   = int(d["T"]),
-                        price= float(d["p"]),
-                        qty  = float(d["q"]),
-                        side = Side.SELL if d["m"] else Side.BUY,
-                        src  = "BIN",
-                    )
+    async def close(self): await self._s.close()
 
-    async def close(self):
-        await self.sess.close()
+
+async def trade_socket():
+    """Асинхронный генератор тиков Binance."""
+    async with aiohttp.ClientSession() as s, s.ws_connect(_WS_URL, heartbeat=60) as ws:
+        async for msg in ws:
+            if msg.type is aiohttp.WSMsgType.TEXT:
+                d = json.loads(msg.data)
+                yield {
+                    "ts": d["T"], "price": float(d["p"]), "qty": float(d["q"]),
+                    "side": "sell" if d["m"] else "buy", "src": "BIN"
+                }
+            elif msg.type is aiohttp.WSMsgType.ERROR:
+                log.error("WS error: %s", msg)
+                break
+
+
+# мини-самотест
+if __name__ == "__main__":                            # pragma: no cover
+    async def _test():
+        async for t in trade_socket():
+            print(t)
+    asyncio.run(_test())

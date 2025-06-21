@@ -35,5 +35,27 @@ services:
       - warning
     volumes:
       - redis-data:/data
+  worker:
+    build:
+      context: .
+      target: bot
+    depends_on:
+      redis:
+        condition: service_started
+    environment:
+      PYTHONPATH: /app
+      REDIS_HOST: redis
+    command:
+      - python
+      - -m
+      - adaptive_crypto_bot.worker
+    healthcheck:
+      test:
+        - CMD
+        - /docker/healthcheck.sh
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
 volumes:
   redis-data: {}
