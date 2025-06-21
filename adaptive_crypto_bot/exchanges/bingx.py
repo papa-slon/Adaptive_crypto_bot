@@ -1,106 +1,85 @@
-"""Мини-SDK для BingX (REST + WebSocket).  Покрывает:
-   • тик-стрим (WebSocket)
-   • размещение / отмену ордеров (REST)
-   • получение баланса / позиций
-
-Документация: https://bingx-api.github.io/docs/
-Шифрование сигнатуры: HMAC-SHA256 на (query_string + ''&timestamp=…'')
-"""
-
+"""Упрощённый клиент BingX (Perp/Spot – public + private)."""
 from __future__ import annotations
-import hmac, hashlib, time, aiohttp, asyncio, json, logging, urllib.parse
-from typing import Dict, Any, AsyncGenerator, Optional
+import hmac, hashlib, time, aiohttp, json, logging, urllib.parse, asyncio
+from adaptive_crypto_bot.config import get_settings
+from adaptive_crypto_bot.utils.logging import setup
 
-from adaptive_crypto_bot.core.models import Tick, Side
-from adaptive_crypto_bot.utils.rate_limiter import AsyncRateLimiter
+log = setup()
+S   = get_settings()
 
-_LOG = logging.getLogger("bingx")
+_BASE_URL = "https://open-api.bingx.com"
+_WS_URL   = "wss://open-api.bingx.com/market"          # public quote-stream
 
-BASE_REST = "https://open-api.bingx.com/api/v4"
-WS_TRADE  = "wss://open-api.bingx.com/market"
 
-class BingXClient:
-    def __init__(self, api_key: str, secret: str, symbol: str = "BTC-USDT") -> None:
-        self.api_key = api_key
-        self.secret  = secret.encode()
-        self.symbol  = symbol
-        self.session = aiohttp.ClientSession()
-        # 30 req / 3 s  ⇒ 10 req/s
-        self.limiter = AsyncRateLimiter(rate=10, per=1.0)
+# ───────────────────────── REST ──────────────────────────
+class BingXREST:
+    def __init__(self) -> None:
+        self._s = aiohttp.ClientSession()
 
-    # ── подпись ────────────────────────────────────────────────────────────────
-    def _sign(self, qs: str) -> str:
-        return hmac.new(self.secret, qs.encode(), hashlib.sha256).hexdigest()
-
-    # ── унифицированный REST ───────────────────────────────────────────────────
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        params: Optional[Dict[str, Any]] = None,
-        auth: bool = False,
-    ) -> Any:
-        params = params or {}
+    async def _req(self, method: str, path: str, auth: bool = False, **params) -> dict:
+        ts = int(time.time() * 1000)
+        params["timestamp"] = ts
+        params = {k: v for k, v in params.items() if v is not None}
+        q = urllib.parse.urlencode(params, True)
+        headers: dict[str, str] = {"Content-Type": "application/x-www-form-urlencoded"}
         if auth:
-            params["timestamp"] = int(time.time() * 1000)
-            qs_no_sig = urllib.parse.urlencode(sorted(params.items()))
-            params["signature"] = self._sign(qs_no_sig)
-            headers = {"X-BX-APIKEY": self.api_key}
-        else:
-            headers = {}
+            sig = hmac.new(S.BINGX_SECRET.encode(), q.encode(), hashlib.sha256).hexdigest()
+            headers["X-BX-APIKEY"] = S.BINGX_API_KEY
+            headers["X-BX-SIGNATURE"] = sig
+        url = f"{_BASE_URL}{path}"
+        async with self._s.request(method, url, headers=headers, data=q) as r:
+            data = await r.json()
+            if r.status != 200 or data.get("code") not in (0, "0"):
+                raise RuntimeError(f"BingX error {data}")
+            return data.get("data", data)
 
-        url = f"{BASE_REST}{path}"
-        async with self.limiter:
-            async with self.session.request(method, url, params=params, headers=headers) as r:
-                r.raise_for_status()
-                return await r.json()
+    # health-ping
+    async def ping(self) -> dict:
+        return await self._req("GET", "/openApi/spot/v1/common/time")
 
-    # ── PUBLIC endpoints ───────────────────────────────────────────────────────
-    async def ping(self) -> bool:
-        try:
-            await self._request("GET", "/ping")
-            return True
-        except Exception as e:
-            _LOG.warning("Ping error: %s", e)
-            return False
-
-    # ── PRIVATE endpoints (trading) ────────────────────────────────────────────
-    async def create_order(
-        self, side: Side, qty: float, price: float
-    ) -> Dict[str, Any]:
-        data = {
-            "symbol": self.symbol,
-            "price": price,
-            "quantity": qty,
-            "side": side.value,
-            "type": "LIMIT",
-            "timeInForce": "GTC",
-        }
-        return await self._request("POST", "/trade/order", data, auth=True)
-
-    async def cancel(self, order_id: str) -> Any:
-        return await self._request(
-            "DELETE", "/trade/order", {"orderId": order_id, "symbol": self.symbol}, auth=True
+    async def new_order(self, side: str, qty: float, price: float | None = None):
+        typ = "LIMIT" if price else "MARKET"
+        return await self._req(
+            "POST", "/openApi/spot/v1/trade/order", True,
+            symbol=S.SYMBOL, side=side.upper(), type=typ,
+            quantity=qty, price=price, timeInForce="GTC" if price else None
         )
 
-    # ── WS тик-стрим ───────────────────────────────────────────────────────────
-    async def ticker_stream(self) -> AsyncGenerator[Tick, None]:
-        uri = f"{WS_TRADE}?symbol={self.symbol.lower()}@trade"
-        async with aiohttp.ClientSession() as sess:
-            async with sess.ws_connect(uri, heartbeat=30) as ws:
-                async for msg in ws:
-                    if msg.type != aiohttp.WSMsgType.TEXT:
-                        continue
-                    data = json.loads(msg.data)
-                    tick = Tick(
-                        ts   = int(data["T"]),
-                        price= float(data["p"]),
-                        qty  = float(data["q"]),
-                        side = Side.BUY if not data["m"] else Side.SELL,
-                        src  = "BGX",
-                    )
-                    yield tick
+    async def close(self): await self._s.close()
 
-    # ── graceful shutdown ──────────────────────────────────────────────────────
-    async def close(self) -> None:
-        await self.session.close()
+
+# ──────────────────────── WEBSOCKET ───────────────────────
+async def trade_socket():
+    """
+    BingX public trade-stream (конвертация к унифицированному тик-формату).
+    NB: schema упрощена до `{"data":[{...}]}`.
+    """
+    async with aiohttp.ClientSession() as s, s.ws_connect(_WS_URL) as ws:
+        # подписка на торговый поток символа
+        sub = {"id": 1, "type": "SUBSCRIBE", "topic": f"trade:{S.SYMBOL}"}
+        await ws.send_str(json.dumps(sub))
+
+        async for msg in ws:
+            if msg.type is aiohttp.WSMsgType.TEXT:
+                d = json.loads(msg.data)
+                if "data" not in d:      # ping/ack etc.
+                    continue
+                for t in d["data"]:
+                    yield {
+                        "ts": int(t["ts"]),
+                        "price": float(t["p"]),
+                        "qty": float(t["v"]),
+                        "side": t["s"],
+                        "src": "BGX"
+                    }
+            elif msg.type is aiohttp.WSMsgType.ERROR:
+                log.error("BingX WS error: %s", msg)
+                break
+
+
+# быстрый самотест
+if __name__ == "__main__":                            # pragma: no cover
+    async def _test():
+        async for t in trade_socket():
+            print(t)
+    asyncio.run(_test())
