@@ -17,6 +17,9 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # теперь всё остальное приложение
 COPY . .
+# healthcheck script
+COPY docker/healthcheck.sh /docker/healthcheck.sh
+RUN chmod +x /docker/healthcheck.sh
 
 RUN pip install -e .
 
