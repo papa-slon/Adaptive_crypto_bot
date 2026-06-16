@@ -74,3 +74,28 @@ above — 4 of 6 configs net positive, though low trade count = low confidence).
 ```bash
 python -m algo_engine.scripts.run_batch   # needs internet (runs on CI here)
 ```
+
+## Adaptive grid (15m/30m, 6 symbols, maker-ish fees — OPTIMISTIC fills)
+
+3 grid configs x 6 symbols x {15m, 30m}. Robustness gate NOT cleared, but the
+behaviour is fundamentally different from the directional strategies:
+
+| config | tf | symbols+ | median ret% | kills |
+|---|---|---|---|---|
+| grid_notrend | 15m / 30m | 2/6 · 0/6 | −0.5% · −4.0% | 0/6 · 0/6 |
+| grid_tight   | 15m / 30m | 0/6 · 1/6 | −1.8% · −3.2% | 0/6 · 0/6 |
+| grid_wide    | 15m / 30m | 1/6 · 2/6 | −0.5% · −3.2% | 0/6 · 0/6 |
+
+**Key takeaway:** the directional strategies blew up to −25% (kill-switch). The
+grid NEVER blew up (0 kills / 36 runs) and sits ~flat (−0.5% on 15m). It is the
+closest thing to break-even found at low TF — costs + mild trend-bleed keep it
+just under zero. A market-maker that is ~flat on price needs an INCOME source
+(maker rebates and/or funding) to cross into positive expectancy.
+
+## Overall conclusion (after directional x6, grid x3, taker+maker, 6 symbols)
+
+At 5–30m on liquid crypto, **no bar-based strategy showed a positive
+generalizing edge.** Direction-prediction loses; the grid (a primitive
+market-maker) only breaks even. The realistic positive-expectancy path at low
+TF is market-making INCOME (spread + funding + maker rebates), not direction
+prediction — or moving to higher timeframes where direction has signal (4h).
