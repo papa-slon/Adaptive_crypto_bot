@@ -92,7 +92,22 @@ closest thing to break-even found at low TF — costs + mild trend-bleed keep it
 just under zero. A market-maker that is ~flat on price needs an INCOME source
 (maker rebates and/or funding) to cross into positive expectancy.
 
-## Overall conclusion (after directional x6, grid x3, taker+maker, 6 symbols)
+## Funding-aware grid (REAL Binance funding, base vs fund vs tilt)
+
+| variant | tf | symbols+ | median ret% | funding contribution |
+|---|---|---|---|---|
+| base | 15m / 30m | 0/6 · 1/6 | −1.4% / −3.4% | — |
+| fund (real funding credited) | 15m / 30m | 0/6 · 1/6 | −1.4% / −3.4% | **≈ ±0.1%** |
+| tilt (lean to carry side) | 15m / 30m | 0/6 · 1/6 | −2.7% / −5.5% | ≈ ±0.1% |
+
+**Funding added ~nothing (±0.1%)** because a delta-neutral grid carries ~0 net
+inventory, and funding accrues on NET position. Deliberately tilting to collect
+funding made it WORSE (shorting to earn positive funding = shorting into the
+rally that causes positive funding; directional loss > funding earned). This is
+the textbook proof that funding harvest needs a SPOT hedge (long spot + short
+perp), which a single futures account cannot do.
+
+## Overall conclusion (after directional x6, grid x3, funding-aware x3, 6 symbols)
 
 At 5–30m on liquid crypto, **no bar-based strategy showed a positive
 generalizing edge.** Direction-prediction loses; the grid (a primitive
