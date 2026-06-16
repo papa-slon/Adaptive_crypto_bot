@@ -60,3 +60,16 @@ equity/margin) — not applied manually.
 
 Start tiny (e.g. `--notional 20 --leverage 1`), watch a couple of 8h funding
 settlements, then scale. Never run leverage you can't margin-top-up in a rally.
+
+## Monitoring dashboard
+
+The live loop writes `logs/carry_state.json` + `logs/carry_history.jsonl` each
+tick. A zero-dependency dark terminal dashboard renders them:
+
+```bash
+python -m algo_engine.carry_bot.dashboard --port 8080   # open http://localhost:8080
+```
+
+Shows equity + curve, P&L (abs + %), funding collected, perp margin-ratio gauge,
+both position legs, and a live activity feed; auto-refreshes every 5s. In Docker
+it runs as the `dashboard` service on port 8080 (see `deploy/`).

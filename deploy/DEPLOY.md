@@ -30,7 +30,7 @@ nano .env        # paste BYBIT_API_KEY / BYBIT_API_SECRET, set CARRY_NOTIONAL et
 docker compose run --rm --entrypoint python carry-bot \
   -m algo_engine.carry_bot.run --venue bybit-demo --symbol BTCUSDT
 
-# then start the live demo bot in the background, auto-restarting:
+# then start the live demo bot + the dashboard, auto-restarting:
 docker compose up -d --build
 
 # watch it:
@@ -40,6 +40,17 @@ tail -f logs/carry_bot.log      # persisted log (send this if something breaks)
 # stop it (unwinds within the 30s grace period):
 docker compose down
 ```
+
+## Monitoring dashboard
+
+`docker compose up -d` also starts a dashboard on port **8080**. Open
+`http://<server-ip>:8080` in any browser/phone: a dark terminal page showing
+equity + curve, P&L, funding collected, perp margin ratio (gauge), both
+position legs, and a live activity feed. It auto-refreshes every 5s and reads
+the same state the bot writes (`logs/carry_state.json` + `logs/carry_history.jsonl`).
+
+On a PaaS (Railway/Render) expose port 8080 to get a public dashboard URL.
+Run it standalone too: `python -m algo_engine.carry_bot.dashboard --port 8080`.
 
 ## Safety recap
 

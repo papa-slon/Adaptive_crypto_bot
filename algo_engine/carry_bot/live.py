@@ -22,9 +22,11 @@ import argparse
 import logging
 import os
 import time
+from collections import deque
 
 from algo_engine.carry_bot.bot import CarryBot, CarryBotConfig
 from algo_engine.carry_bot.bybit_venue import DEMO_BASE, MAINNET_BASE, BybitVenue
+from algo_engine.carry_bot.state import StateWriter, build_snapshot
 
 LOG_PATH = "logs/carry_bot.log"
 
@@ -80,27 +82,42 @@ def run_live(symbol: str, notional: float, leverage: float, poll_seconds: float,
 
     # 3) open the carry (REAL demo orders)
     bot = CarryBot(venue, CarryBotConfig(notional=notional, leverage=leverage))
+    actions: deque = deque(maxlen=40)
+    writer = StateWriter()
+    meta = {"mode": "bybit-demo" if base_url == DEMO_BASE else "bybit",
+            "symbol": symbol, "notional": notional, "leverage": leverage}
     for a in bot.open():
-        log.info("OPEN: %s", a)
+        log.info("OPEN: %s", a); actions.appendleft(f"{a}")
+    bot.start_equity_snapshot = venue.equity()
 
     # 4) monitor loop — resilient: transient errors never crash the process;
     #    a sustained error streak triggers a safe unwind.
     t0 = time.time()
     errors = 0
     max_consec_errors = 10
+
+    def persist():
+        try:
+            writer.update(build_snapshot(venue, bot, meta, actions, errors, t0))
+        except Exception as exc:  # noqa: BLE001 — dashboard write must never break trading
+            log.warning("state write failed: %s", str(exc)[:80])
+
+    persist()
     try:
         while bot.state == "HOLD":
             time.sleep(poll_seconds)
             try:
                 for a in bot.step():
-                    log.info("ACT: %s", a)
+                    log.info("ACT: %s", a); actions.appendleft(a)
                 log.info("status: price=%.6g perp_qty=%.6g spot_qty=%.6g margin_ratio=%.3f equity=%.4f",
                          venue.mark_price(), venue.perp_short_qty(), venue.spot_base_qty(),
                          venue.perp_margin_ratio(), venue.equity())
                 errors = 0
+                persist()
             except Exception as exc:  # noqa: BLE001 — survive transient venue/network errors
                 errors += 1
                 log.warning("tick error %d/%d: %s", errors, max_consec_errors, str(exc)[:120])
+                persist()
                 if errors >= max_consec_errors:
                     log.error("error streak -> safe unwind")
                     try:
@@ -119,7 +136,8 @@ def run_live(symbol: str, notional: float, leverage: float, poll_seconds: float,
     except KeyboardInterrupt:
         log.info("manual stop -> unwinding")
         for a in bot.unwind("manual stop"):
-            log.info("ACT: %s", a)
+            log.info("ACT: %s", a); actions.appendleft(a)
+    persist()
     log.info("DONE state=%s", bot.state)
     return 0
 
