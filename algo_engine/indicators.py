@@ -71,6 +71,41 @@ def donchian(df: pd.DataFrame, period: int) -> tuple[pd.Series, pd.Series]:
     return upper, lower
 
 
+def bollinger(series: pd.Series, period: int = 20, k: float = 2.0):
+    """Bollinger Bands -> (mid, upper, lower). Causal (rolling, ends at i)."""
+    mid = series.rolling(period, min_periods=period).mean()
+    sd = series.rolling(period, min_periods=period).std(ddof=0)
+    return mid, mid + k * sd, mid - k * sd
+
+
+def keltner(df: pd.DataFrame, period: int = 20, k: float = 1.5):
+    """Keltner Channels -> (mid, upper, lower) using EMA + ATR."""
+    mid = ema(df["close"], period)
+    rng = atr(df, period)
+    return mid, mid + k * rng, mid - k * rng
+
+
+def session_vwap(df: pd.DataFrame) -> pd.Series:
+    """Intraday VWAP that resets each UTC day. Cumulative up to bar i (causal)."""
+    tp = (df["high"] + df["low"] + df["close"]) / 3.0
+    day = df.index.tz_convert("UTC").date if df.index.tz is not None else df.index.date
+    grp = pd.Series(day, index=df.index)
+    pv = (tp * df["volume"]).groupby(grp).cumsum()
+    vv = df["volume"].groupby(grp).cumsum().replace(0.0, np.nan)
+    return pv / vv
+
+
+def rolling_high_low(df: pd.DataFrame, period: int):
+    """Prior-window swing level (shifted by 1) -> (resistance, support).
+
+    Level at bar i is built from the `period` bars ENDING at i-1, so comparing
+    bar i's price to it detects a poke/breakout without look-ahead.
+    """
+    res = df["high"].rolling(period, min_periods=period).max().shift(1)
+    sup = df["low"].rolling(period, min_periods=period).min().shift(1)
+    return res, sup
+
+
 def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     """Average Directional Index — trend-strength filter (0..100)."""
     up = df["high"].diff()

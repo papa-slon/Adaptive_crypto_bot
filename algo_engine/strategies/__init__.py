@@ -10,10 +10,15 @@ from __future__ import annotations
 from .base import Signal, Strategy
 from .trend_breakout import TrendBreakout
 from .mean_reversion import MeanReversion
+from .intraday import SqueezeBreakout, TrendPullback, VwapReversion, RangeRejection
 
 REGISTRY: dict[str, type[Strategy]] = {
     "trend_breakout": TrendBreakout,
     "mean_reversion": MeanReversion,
+    "squeeze_breakout": SqueezeBreakout,
+    "trend_pullback": TrendPullback,
+    "vwap_reversion": VwapReversion,
+    "range_rejection": RangeRejection,
 }
 
 
@@ -23,4 +28,8 @@ def build(name: str, **params) -> Strategy:
     return REGISTRY[name](**params)
 
 
-__all__ = ["Signal", "Strategy", "TrendBreakout", "MeanReversion", "REGISTRY", "build"]
+__all__ = [
+    "Signal", "Strategy", "REGISTRY", "build",
+    "TrendBreakout", "MeanReversion",
+    "SqueezeBreakout", "TrendPullback", "VwapReversion", "RangeRejection",
+]
