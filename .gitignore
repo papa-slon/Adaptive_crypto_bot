@@ -1,0 +1,8 @@
+
+# algo_engine runtime artifacts
+data_cache/
+STOP
+*.eq.csv
+eq.csv
+__pycache__/
+*.pyc
