@@ -6,6 +6,12 @@ name: backtest batch (real data)
 
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - claude/crypto-algo-trading-bot-sti7oe
+    paths:
+      - "algo_engine/scripts/run_batch.py"
+      - ".github/workflows/backtest-batch.yml"
 
 jobs:
   backtest:
