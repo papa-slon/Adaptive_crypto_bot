@@ -7,6 +7,7 @@ on:
       - claude/crypto-algo-trading-bot-sti7oe
     paths:
       - "algo_engine/scripts/run_carry.py"
+      - "algo_engine/scripts/run_carry_regimes.py"
       - "algo_engine/carry.py"
       - ".github/workflows/carry-sweep.yml"
 
@@ -24,3 +25,5 @@ jobs:
           pip install pandas numpy pyyaml
       - name: Run delta-neutral funding carry sweep
         run: python -m algo_engine.scripts.run_carry
+      - name: Run carry across regimes & leverage
+        run: python -m algo_engine.scripts.run_carry_regimes

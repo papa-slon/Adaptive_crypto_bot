@@ -92,11 +92,14 @@ def fetch_bybit_klines(
     return _normalize(df)
 
 
-def _recent_months(n: int) -> list[str]:
-    """Return the last `n` 'YYYY-MM' strings ending at the current month."""
-    now = datetime.now(timezone.utc)
+def _recent_months(n: int, end_month: str | None = None) -> list[str]:
+    """Return `n` 'YYYY-MM' strings ending at `end_month` (default: current month)."""
+    if end_month:
+        y, m = int(end_month[:4]), int(end_month[5:7])
+    else:
+        now = datetime.now(timezone.utc)
+        y, m = now.year, now.month
     months = []
-    y, m = now.year, now.month
     for _ in range(n):
         months.append(f"{y:04d}-{m:02d}")
         m -= 1
@@ -111,18 +114,20 @@ def fetch_binance_vision_klines(
     interval_min: int,
     months: int = 4,
     market: str = "futures/um",
+    end_month: str | None = None,
 ) -> pd.DataFrame:
     """Download monthly kline archives from data.binance.vision (CDN, no auth).
 
     Reachable from datacenter IPs where the live exchange APIs are geo-blocked.
     Skips months whose archive doesn't exist yet (e.g. the current month).
+    `end_month` ('YYYY-MM') fetches a PAST window instead of the recent one.
     """
     if interval_min not in _VISION_INTERVALS:
         raise ValueError(f"unsupported interval {interval_min}m; use {sorted(_VISION_INTERVALS)}")
     interval = _VISION_INTERVALS[interval_min]
     frames: list[pd.DataFrame] = []
     # try a couple extra months to tolerate the missing current month
-    for ym in _recent_months(months + 1):
+    for ym in _recent_months(months + 1, end_month):
         url = f"{_VISION_BASE}/data/{market}/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{ym}.zip"
         try:
             with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
@@ -153,14 +158,15 @@ def fetch_binance_vision_klines(
     return _normalize(out)
 
 
-def fetch_binance_vision_funding(symbol: str, months: int = 6) -> pd.Series:
+def fetch_binance_vision_funding(symbol: str, months: int = 6,
+                                 end_month: str | None = None) -> pd.Series:
     """Download real funding-rate history from data.binance.vision.
 
     Returns a Series indexed by UTC funding timestamp, value = funding rate
     (fraction, per 8h interval). Longs pay shorts when the rate is positive.
     """
     frames: list[pd.DataFrame] = []
-    for ym in _recent_months(months + 1):
+    for ym in _recent_months(months + 1, end_month):
         url = (f"{_VISION_BASE}/data/futures/um/monthly/fundingRate/"
                f"{symbol}/{symbol}-fundingRate-{ym}.zip")
         try:
