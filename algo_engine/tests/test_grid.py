@@ -10,6 +10,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from algo_engine.data import align_funding_to_bars
 from algo_engine.grid import GridConfig, simulate_grid
 
 
@@ -49,3 +50,31 @@ def test_grid_survives_strong_downtrend():
     r = simulate_grid(df, GridConfig())
     # trend gate blocks buying the falling knife -> protected, not a -25% wipeout
     assert r["total_return"] > -0.25, r
+
+
+def test_align_funding_to_bars_maps_events():
+    idx = pd.date_range("2025-01-01", periods=100, freq="15min", tz="UTC")
+    # one funding event at the 10th bar's timestamp
+    funding = pd.Series([0.0001], index=[idx[10]])
+    arr = align_funding_to_bars(idx, funding)
+    assert arr[10] == 0.0001 and arr.sum() == 0.0001
+
+
+def test_funding_accounting_long_pays_positive_funding():
+    # steady decline -> longs fill and stay open (TP above never hit); with
+    # POSITIVE funding, held longs PAY -> funding_return must be negative.
+    path = np.linspace(100.0, 80.0, 500)
+    df = _ohlc_from_path(path, wick=0.2)
+    fund = np.full(len(df), 0.0002)                  # positive every bar
+    r = simulate_grid(df, GridConfig(step_atr=0.4, trend_block=99.0), funding_per_bar=fund)
+    assert r["funding_return"] < 0, r
+
+
+def test_funding_accounting_short_receives_positive_funding():
+    # steady incline -> shorts fill and stay open; with POSITIVE funding, held
+    # shorts RECEIVE -> funding_return must be positive.
+    path = np.linspace(100.0, 120.0, 500)
+    df = _ohlc_from_path(path, wick=0.2)
+    fund = np.full(len(df), 0.0002)
+    r = simulate_grid(df, GridConfig(step_atr=0.4, trend_block=99.0), funding_per_bar=fund)
+    assert r["funding_return"] > 0, r

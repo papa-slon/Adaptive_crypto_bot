@@ -153,6 +153,55 @@ def fetch_binance_vision_klines(
     return _normalize(out)
 
 
+def fetch_binance_vision_funding(symbol: str, months: int = 6) -> pd.Series:
+    """Download real funding-rate history from data.binance.vision.
+
+    Returns a Series indexed by UTC funding timestamp, value = funding rate
+    (fraction, per 8h interval). Longs pay shorts when the rate is positive.
+    """
+    frames: list[pd.DataFrame] = []
+    for ym in _recent_months(months + 1):
+        url = (f"{_VISION_BASE}/data/futures/um/monthly/fundingRate/"
+               f"{symbol}/{symbol}-fundingRate-{ym}.zip")
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
+                blob = resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 404):
+                continue
+            raise
+        zf = zipfile.ZipFile(io.BytesIO(blob))
+        df = pd.read_csv(io.BytesIO(zf.read(zf.namelist()[0])), header=0)
+        frames.append(df)
+
+    if not frames:
+        raise RuntimeError(f"no Binance Vision funding archives for {symbol}")
+
+    out = pd.concat(frames, ignore_index=True)
+    cols = {c.lower(): c for c in out.columns}
+    tcol = next((cols[c] for c in cols if "time" in c), out.columns[0])
+    rcol = next((cols[c] for c in cols if "rate" in c), out.columns[-1])
+    ts = out[tcol].astype("int64")
+    unit = "us" if ts.iloc[0] > 1e14 else "ms"
+    idx = pd.to_datetime(ts, unit=unit, utc=True)
+    s = pd.Series(out[rcol].astype(float).values, index=idx).sort_index()
+    return s[~s.index.duplicated(keep="last")]
+
+
+def align_funding_to_bars(bar_index: pd.DatetimeIndex, funding: pd.Series) -> np.ndarray:
+    """Map funding events onto bars: each event lands on the bar that contains
+    it. Returns a per-bar array (0.0 where no funding event occurs)."""
+    out = np.zeros(len(bar_index), dtype=float)
+    if len(bar_index) < 2 or funding.empty:
+        return out
+    # bar i covers [bar_index[i], bar_index[i+1]); use searchsorted on the left edge
+    pos = bar_index.searchsorted(funding.index, side="right") - 1
+    for p, rate in zip(pos, funding.values):
+        if 0 <= p < len(out):
+            out[p] += float(rate)
+    return out
+
+
 def load(
     symbol: str,
     interval_min: int,

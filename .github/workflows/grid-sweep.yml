@@ -7,6 +7,7 @@ on:
       - claude/crypto-algo-trading-bot-sti7oe
     paths:
       - "algo_engine/scripts/run_grid.py"
+      - "algo_engine/scripts/run_funding_grid.py"
       - "algo_engine/grid.py"
       - ".github/workflows/grid-sweep.yml"
 
@@ -24,3 +25,5 @@ jobs:
           pip install pandas numpy pyyaml
       - name: Run adaptive grid sweep on real data
         run: python -m algo_engine.scripts.run_grid
+      - name: Run funding-aware grid sweep on real data
+        run: python -m algo_engine.scripts.run_funding_grid

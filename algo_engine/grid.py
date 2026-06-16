@@ -39,6 +39,8 @@ class GridConfig:
     fee: float = 0.0002          # maker-ish (grid is fill-heavy)
     slippage: float = 0.0001
     dd_kill: float = 0.25        # liquidate + stop if equity DD exceeds this
+    funding_tilt: bool = False   # lean inventory toward the funding-RECEIVING side
+    tilt_levels: int = 2         # how many rungs of capacity to shift on a tilt
 
 
 @dataclass
@@ -48,14 +50,18 @@ class _Lot:
     tp: float       # take-profit (one grid step toward mean)
 
 
-def simulate_grid(raw_df: pd.DataFrame, cfg: GridConfig, bars_per_year: float = 35040.0) -> dict:
+def simulate_grid(raw_df: pd.DataFrame, cfg: GridConfig, bars_per_year: float = 35040.0,
+                  funding_per_bar: np.ndarray | None = None) -> dict:
     df = raw_df.copy()
     df["atr"] = ind.atr(df, cfg.atr_period)
     df["ema"] = ind.ema(df["close"], cfg.trend_ema)
+    fund = funding_per_bar if funding_per_bar is not None else np.zeros(len(df))
 
     equity = 1.0                # fraction of start capital
     peak = 1.0
     realized = 0.0
+    funding_pnl = 0.0
+    cur_funding = 0.0           # last seen funding rate (for the tilt)
     longs: list[_Lot] = []
     shorts: list[_Lot] = []
     center: float | None = None
@@ -110,6 +116,24 @@ def simulate_grid(raw_df: pd.DataFrame, cfg: GridConfig, bars_per_year: float = 
                 still_short.append(lot)
         shorts = still_short
 
+        # 1b) funding: at a funding event, longs pay `rate`, shorts receive it
+        #     (per unit notional). Credit/debit every open lot.
+        rate = float(fund[i]) if i < len(fund) else 0.0
+        if rate != 0.0:
+            cur_funding = rate
+            fp = sum((-rate if l.side == "long" else rate) * cfg.order_frac
+                     for l in longs + shorts)
+            funding_pnl += fp; equity += fp
+
+        # tilt capacity toward the RECEIVING side so net inventory collects funding
+        long_cap = short_cap = cfg.max_inventory
+        if cfg.funding_tilt and cur_funding > 0:      # shorts receive -> lean short
+            long_cap = max(0, cfg.max_inventory - cfg.tilt_levels)
+            short_cap = cfg.max_inventory + cfg.tilt_levels
+        elif cfg.funding_tilt and cur_funding < 0:    # longs receive -> lean long
+            long_cap = cfg.max_inventory + cfg.tilt_levels
+            short_cap = max(0, cfg.max_inventory - cfg.tilt_levels)
+
         # 2) trend gate: how stretched is price from the EMA (in ATR units)?
         stretch = (close - ema) / atr
         allow_long = not (cfg.trend_block and stretch < -cfg.trend_block)   # don't buy a falling knife
@@ -122,11 +146,11 @@ def simulate_grid(raw_df: pd.DataFrame, cfg: GridConfig, bars_per_year: float = 
         near = 0.5 * step
         for k in range(1, cfg.n_levels + 1):
             buy_trigger = center - k * step
-            if (allow_long and len(longs) < cfg.max_inventory and low <= buy_trigger
+            if (allow_long and len(longs) < long_cap and low <= buy_trigger
                     and not any(abs(l.entry - buy_trigger) < near for l in longs)):
                 longs.append(_Lot("long", buy_trigger, buy_trigger + step)); n_fills += 1
             sell_trigger = center + k * step
-            if (allow_short and len(shorts) < cfg.max_inventory and high >= sell_trigger
+            if (allow_short and len(shorts) < short_cap and high >= sell_trigger
                     and not any(abs(l.entry - sell_trigger) < near for l in shorts)):
                 shorts.append(_Lot("short", sell_trigger, sell_trigger - step)); n_fills += 1
 
@@ -161,6 +185,7 @@ def simulate_grid(raw_df: pd.DataFrame, cfg: GridConfig, bars_per_year: float = 
         "n_closed": total_trades,
         "win_rate": (wins / total_trades) if total_trades else 0.0,
         "profit_factor": pf,
+        "funding_return": funding_pnl,
         "killed": killed,
         "equity": eq,
     }
