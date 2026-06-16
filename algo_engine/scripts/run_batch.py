@@ -17,15 +17,16 @@ from algo_engine.risk import RiskConfig
 from algo_engine.strategies import REGISTRY, build
 
 # (symbol, interval_minutes, history_months)
+# Higher-TF extension: same strategies, SAME params (no tuning) — testing the
+# data-driven hypothesis that fee drag (which dominates at 1-15m) eases as the
+# timeframe rises. NOT a parameter search.
 JOBS = [
-    ("BTCUSDT", 5, 4),
-    ("BTCUSDT", 15, 6),
-    ("ETHUSDT", 5, 4),
-    ("ETHUSDT", 15, 6),
-    ("SOLUSDT", 5, 4),
-    ("SOLUSDT", 15, 6),
-    ("BTCUSDT", 1, 2),
-    ("ETHUSDT", 1, 2),
+    ("BTCUSDT", 60, 10),
+    ("ETHUSDT", 60, 10),
+    ("SOLUSDT", 60, 10),
+    ("BTCUSDT", 240, 18),
+    ("ETHUSDT", 240, 18),
+    ("SOLUSDT", 240, 18),
 ]
 RISK_PCT = 0.005
 PF_BAR = 1.30  # profit-factor threshold below which we treat a result as "do not trade"
