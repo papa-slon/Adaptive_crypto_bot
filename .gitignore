@@ -9,3 +9,8 @@ __pycache__/
 
 # runtime logs (carry bot etc.)
 logs/
+
+# deploy secrets + runtime logs
+deploy/.env
+deploy/logs/
+logs/

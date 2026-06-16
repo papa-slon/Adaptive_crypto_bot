@@ -83,19 +83,34 @@ def run_live(symbol: str, notional: float, leverage: float, poll_seconds: float,
     for a in bot.open():
         log.info("OPEN: %s", a)
 
-    # 4) monitor loop
+    # 4) monitor loop — resilient: transient errors never crash the process;
+    #    a sustained error streak triggers a safe unwind.
     t0 = time.time()
+    errors = 0
+    max_consec_errors = 10
     try:
         while bot.state == "HOLD":
             time.sleep(poll_seconds)
-            for a in bot.step():
-                log.info("ACT: %s", a)
             try:
+                for a in bot.step():
+                    log.info("ACT: %s", a)
                 log.info("status: price=%.6g perp_qty=%.6g spot_qty=%.6g margin_ratio=%.3f equity=%.4f",
                          venue.mark_price(), venue.perp_short_qty(), venue.spot_base_qty(),
                          venue.perp_margin_ratio(), venue.equity())
-            except Exception as exc:  # noqa: BLE001 — never let a read kill the loop
-                log.warning("status read failed: %s", str(exc)[:80])
+                errors = 0
+            except Exception as exc:  # noqa: BLE001 — survive transient venue/network errors
+                errors += 1
+                log.warning("tick error %d/%d: %s", errors, max_consec_errors, str(exc)[:120])
+                if errors >= max_consec_errors:
+                    log.error("error streak -> safe unwind")
+                    try:
+                        for a in bot.unwind("error-streak"):
+                            log.info("ACT: %s", a)
+                    except Exception as exc2:  # noqa: BLE001
+                        log.error("unwind failed (manual check needed): %s", str(exc2)[:120])
+                    break
+                time.sleep(min(poll_seconds * errors, 120))
+                continue
             if max_minutes and (time.time() - t0) / 60.0 >= max_minutes:
                 log.info("max-minutes reached -> unwinding")
                 for a in bot.unwind("max-minutes"):
@@ -109,13 +124,20 @@ def run_live(symbol: str, notional: float, leverage: float, poll_seconds: float,
     return 0
 
 
+def _env_float(name: str, default):
+    val = os.environ.get(name)
+    return float(val) if val not in (None, "") else default
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--symbol", default="BTCUSDT")
-    ap.add_argument("--notional", type=float, default=20.0, help="USDT per leg")
-    ap.add_argument("--leverage", type=float, default=1.0)
-    ap.add_argument("--poll-seconds", type=float, default=30.0)
-    ap.add_argument("--max-minutes", type=float, default=None,
+    # defaults come from env so a server `.env` configures everything
+    ap.add_argument("--symbol", default=os.environ.get("CARRY_SYMBOL", "BTCUSDT"))
+    ap.add_argument("--notional", type=float, default=_env_float("CARRY_NOTIONAL", 20.0),
+                    help="USDT per leg")
+    ap.add_argument("--leverage", type=float, default=_env_float("CARRY_LEVERAGE", 1.0))
+    ap.add_argument("--poll-seconds", type=float, default=_env_float("CARRY_POLL", 30.0))
+    ap.add_argument("--max-minutes", type=float, default=_env_float("CARRY_MAX_MINUTES", None),
                     help="auto-unwind after this many minutes (optional)")
     ap.add_argument("--mainnet", action="store_true", help="use mainnet (real funds)")
     ap.add_argument("--yes-mainnet", action="store_true", help="confirm mainnet")
