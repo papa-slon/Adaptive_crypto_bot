@@ -6,3 +6,6 @@ STOP
 eq.csv
 __pycache__/
 *.pyc
+
+# runtime logs (carry bot etc.)
+logs/

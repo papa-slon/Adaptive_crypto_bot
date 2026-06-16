@@ -48,11 +48,11 @@ def resolve_keys() -> tuple[str, str] | None:
 
 def run_live(symbol: str, notional: float, leverage: float, poll_seconds: float,
              base_url: str, max_minutes: float | None = None) -> int:
-    log = _logger()
     keys = resolve_keys()
     if not keys:
-        log.error("set BYBIT_API_KEY and BYBIT_API_SECRET (Bybit Demo keys) in your env.")
+        print("set BYBIT_API_KEY and BYBIT_API_SECRET (Bybit Demo keys) in your env.")
         return 2
+    log = _logger()
     venue = BybitVenue(*keys, symbol=symbol, base_url=base_url,
                        enable_trading=True, leverage=leverage)
 
