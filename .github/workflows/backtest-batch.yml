@@ -1,0 +1,23 @@
+name: backtest batch (real data)
+
+# Manually-triggered sweep that runs the strategies on REAL Bybit data
+# (the GitHub runner has internet; our build sandbox does not). Read the
+# results table straight out of the job log.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pyyaml
+      - name: Run batch backtest on real data
+        run: python -m algo_engine.scripts.run_batch
