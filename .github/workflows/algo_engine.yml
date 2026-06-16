@@ -1,0 +1,37 @@
+name: algo_engine CI
+
+# Separate, additive workflow that tests ONLY the algo_engine package.
+# It deliberately does not touch the legacy `tests/` suite or the existing
+# Python CI — those have pre-existing issues unrelated to this engine.
+
+on:
+  push:
+    paths:
+      - "algo_engine/**"
+      - ".github/workflows/algo_engine.yml"
+  pull_request:
+    paths:
+      - "algo_engine/**"
+      - ".github/workflows/algo_engine.yml"
+
+jobs:
+  algo-engine-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pyyaml pytest
+
+      - name: Run algo_engine tests
+        run: pytest algo_engine/tests -q
+
+      - name: Smoke-check the engine end-to-end (offline, synthetic data)
+        run: python -m algo_engine.cli compare --synthetic 4000 --interval 5
