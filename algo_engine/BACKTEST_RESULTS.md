@@ -107,6 +107,24 @@ rally that causes positive funding; directional loss > funding earned). This is
 the textbook proof that funding harvest needs a SPOT hedge (long spot + short
 perp), which a single futures account cannot do.
 
+## Carry across funding regimes & leverage (median over 6 symbols)
+
+| window | leverage | ann.yield% | maxDD% | perp-leg liquidations |
+|---|---|---|---|---|
+| recent ~8mo (dry funding) | 1x | +0.9 | −0.8 | 0/6 |
+| recent | 3x | +2.8 | −2.2 | 1/6 |
+| recent | 5x | +4.6 | −3.7 | 1/6 |
+| **bull 2024H2→25 (high funding)** | **1x** | **+10.1** | **−0.9** | 2/6 |
+| bull | 3x | +31.8 | −2.6 | 5/6 |
+| bull | 5x | +55.4 | −4.1 | 6/6 |
+
+**Read:** in a normal/high-funding regime, unleveraged carry yields ~+10%/yr at
+<1% drawdown — a genuine low-risk return. Leverage scales yield ~linearly but
+lights up perp-leg liquidations during rallies (3x: 5/6 symbols; 5x: 6/6) — the
+isolated short perp hits maintenance margin before the offsetting spot gain is
+realised. The real leverage risk is liquidation (needs margin top-ups), not the
+(small) drawdown. Carry yield tracks the funding REGIME, not code cleverness.
+
 ## Delta-neutral funding carry (long spot + short perp) — the one real edge
 
 Real spot + perp + funding, ~8 months, 1x, taker fees on both legs.
