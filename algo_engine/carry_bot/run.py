@@ -96,8 +96,10 @@ def main() -> int:
                     help="(disabled) auto live trading is not wired in this entry point")
     args = ap.parse_args()
     if args.live:
-        print("LIVE auto-trading is intentionally not wired here. Use --venue bybit-demo for a "
-              "read-only check; enable order placement deliberately in code after validating.")
+        print("Live demo trading lives in its own entry point (real orders on Bybit Demo):\n"
+              "  export BYBIT_API_KEY=...  BYBIT_API_SECRET=...\n"
+              "  python -m algo_engine.carry_bot.live --symbol BTCUSDT --notional 20 --leverage 1\n"
+              "Use --venue bybit-demo here for a read-only connectivity check first.")
         return 2
     if args.venue == "bybit-demo":
         return bybit_connectivity(args.symbol)

@@ -66,3 +66,12 @@ def test_dd_killswitch_unwinds():
         if bot.step() and bot.state == "FLAT":
             break
     assert bot.state == "FLAT"
+
+
+def test_live_requires_keys(monkeypatch):
+    # run_live must bail out (no network) when demo keys are absent
+    from algo_engine.carry_bot.live import run_live
+    from algo_engine.carry_bot.bybit_venue import DEMO_BASE
+    monkeypatch.delenv("BYBIT_API_KEY", raising=False)
+    monkeypatch.delenv("BYBIT_API_SECRET", raising=False)
+    assert run_live("BTCUSDT", 20.0, 1.0, 30.0, DEMO_BASE) == 2

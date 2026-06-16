@@ -33,11 +33,30 @@ All logic is in `bot.py` (pure, venue-injected). `venue.py::PaperVenue` simulate
 spot+perp+funding in-process for tests and paper trading. Unit tests:
 `../tests/test_carry_bot.py`.
 
-## Going live (NOT wired here — by design)
+## Live on Bybit Demo (real orders, paper money)
 
-`run.py --live` is intentionally disabled. To trade for real you must implement a
-`Venue` adapter (e.g. Bybit unified account: spot buy + linear-perp short + read
-funding/margin over REST/WS) and add your own order-confirmation + risk checks.
-Recommended path: **Bybit Demo first** (paper money on the real venue), tiny size,
-1x, watch the 8h funding settlements and the perp margin, then scale gradually.
-Never run leverage you cannot margin-top-up during a rally.
+Defaults to **Bybit DEMO**; mainnet needs explicit `--mainnet --yes-mainnet`.
+
+```bash
+# 1) read-only connectivity + balance check (no orders)
+export BYBIT_API_KEY=...  BYBIT_API_SECRET=...     # Bybit Demo keys
+python -m algo_engine.carry_bot.run --venue bybit-demo --symbol BTCUSDT
+
+# 2) live demo loop (REAL demo orders): open carry, collect funding, defend margin
+python -m algo_engine.carry_bot.live --symbol BTCUSDT --notional 20 --leverage 1
+#   --poll-seconds 30     how often to monitor/defend
+#   --max-minutes 120     auto-unwind after N minutes (optional)
+#   Ctrl-C                unwinds cleanly
+```
+
+It logs every action + a status line to stdout AND `logs/carry_bot.log` — send me
+that file if anything misbehaves.
+
+Safety built in: read-only until trading is explicitly enabled; demo base URL by
+default; aborts if the demo wallet can't fund the carry; best-effort isolated
+margin so top-ups work; near-liquidation auto-unwind + equity drawdown
+kill-switch as backstops. Funding is settled by the exchange (reflected in
+equity/margin) — not applied manually.
+
+Start tiny (e.g. `--notional 20 --leverage 1`), watch a couple of 8h funding
+settlements, then scale. Never run leverage you can't margin-top-up in a rally.
