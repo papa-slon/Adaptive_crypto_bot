@@ -46,6 +46,29 @@ cost alone is multiples of any signal. The math is against you at low TF.
    backtest looks pretty — that is overfitting and it dies live. The right move
    is out-of-sample / walk-forward testing on more symbols at 4h, then demo.
 
+## Final sweep — 6 strategies x 6 symbols x 5m/15m x (taker AND maker fees)
+
+Strategies tested: trend_breakout, mean_reversion, squeeze_breakout,
+trend_pullback, vwap_reversion, range_rejection (Gerchik-style false breakout).
+Symbols: BTC, ETH, SOL, BNB, XRP, DOGE.
+
+**Taker fees:** 0/6 symbols positive for EVERY strategy at both 5m and 15m
+(median PF 0.34–0.50).
+
+**Maker fees (cut ~3x):** better, but still no pass — best was trend_breakout
+15m (median PF 0.92, still negative; 1/6 symbols positive). Everything else
+0–1/6, median PF 0.59–0.92.
+
+**Conclusion (evidence-backed): there is no generalizing bar-based edge at
+5–15m in any of these designs, and it is NOT merely a fee problem — cutting
+fees to maker levels does not cross the line.** At 5–15m, exploitable patterns
+in liquid crypto are competed away by latency/HFT participants; a retail
+bar-based bot has no structural edge there. This is market structure, not a
+coding failure.
+
+Where a retail systematic bot DID show life: **4h** (see the higher-TF table
+above — 4 of 6 configs net positive, though low trade count = low confidence).
+
 ## Reproduce
 
 ```bash
