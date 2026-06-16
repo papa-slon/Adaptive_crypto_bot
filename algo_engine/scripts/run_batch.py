@@ -12,27 +12,27 @@ from __future__ import annotations
 import traceback
 
 from algo_engine.backtest import Backtester, BacktestConfig, bars_per_year_for
-from algo_engine.data import fetch_bybit_klines
+from algo_engine.data import fetch_binance_vision_klines
 from algo_engine.risk import RiskConfig
 from algo_engine.strategies import REGISTRY, build
 
-# (symbol, interval_minutes, history_days)
+# (symbol, interval_minutes, history_months)
 JOBS = [
-    ("BTCUSDT", 5, 120),
-    ("BTCUSDT", 15, 180),
-    ("ETHUSDT", 5, 120),
-    ("ETHUSDT", 15, 180),
-    ("SOLUSDT", 5, 120),
-    ("SOLUSDT", 15, 180),
-    ("BTCUSDT", 1, 30),
-    ("ETHUSDT", 1, 30),
+    ("BTCUSDT", 5, 4),
+    ("BTCUSDT", 15, 6),
+    ("ETHUSDT", 5, 4),
+    ("ETHUSDT", 15, 6),
+    ("SOLUSDT", 5, 4),
+    ("SOLUSDT", 15, 6),
+    ("BTCUSDT", 1, 2),
+    ("ETHUSDT", 1, 2),
 ]
 RISK_PCT = 0.005
 PF_BAR = 1.30  # profit-factor threshold below which we treat a result as "do not trade"
 
 
-def run_one(symbol, interval, days):
-    df = fetch_bybit_klines(symbol, interval, days=days)
+def run_one(symbol, interval, months):
+    df = fetch_binance_vision_klines(symbol, interval, months=months)
     out = {}
     for name in REGISTRY:
         report, trades, _ = Backtester(
@@ -51,9 +51,9 @@ def main() -> int:
     print(f"risk/trade = {RISK_PCT*100:.2f}%  | fees+slippage applied | PF bar = {PF_BAR}\n")
     print("| symbol | tf | strategy | bars | trades | win% | PF | ret% | maxDD% | Sharpe | killed |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
-    for symbol, interval, days in JOBS:
+    for symbol, interval, months in JOBS:
         try:
-            res = run_one(symbol, interval, days)
+            res = run_one(symbol, interval, months)
         except Exception as exc:  # noqa: BLE001 — report and continue
             print(f"| {symbol} | {interval}m | — | — | FETCH/RUN FAILED: {type(exc).__name__} {str(exc)[:50]} |||||||")
             traceback.print_exc()

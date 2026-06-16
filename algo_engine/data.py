@@ -7,14 +7,21 @@ DataFrame contract everywhere in algo_engine:
 """
 from __future__ import annotations
 
+import io
 import json
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+_VISION_BASE = "https://data.binance.vision"  # public historical dumps (CDN, no key)
+_VISION_INTERVALS = {1: "1m", 3: "3m", 5: "5m", 15: "15m", 30: "30m", 60: "1h", 240: "4h"}
 
 # Bybit interval strings keyed by minutes (their API uses these literals).
 _INTERVAL_MAP = {1: "1", 3: "3", 5: "5", 15: "15", 30: "30", 60: "60", 240: "240"}
@@ -83,6 +90,67 @@ def fetch_bybit_klines(
     df = df.set_index("ts")
     df = df[df.index >= pd.to_datetime(start_ms, unit="ms", utc=True)]
     return _normalize(df)
+
+
+def _recent_months(n: int) -> list[str]:
+    """Return the last `n` 'YYYY-MM' strings ending at the current month."""
+    now = datetime.now(timezone.utc)
+    months = []
+    y, m = now.year, now.month
+    for _ in range(n):
+        months.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    return list(reversed(months))
+
+
+def fetch_binance_vision_klines(
+    symbol: str,
+    interval_min: int,
+    months: int = 4,
+    market: str = "futures/um",
+) -> pd.DataFrame:
+    """Download monthly kline archives from data.binance.vision (CDN, no auth).
+
+    Reachable from datacenter IPs where the live exchange APIs are geo-blocked.
+    Skips months whose archive doesn't exist yet (e.g. the current month).
+    """
+    if interval_min not in _VISION_INTERVALS:
+        raise ValueError(f"unsupported interval {interval_min}m; use {sorted(_VISION_INTERVALS)}")
+    interval = _VISION_INTERVALS[interval_min]
+    frames: list[pd.DataFrame] = []
+    # try a couple extra months to tolerate the missing current month
+    for ym in _recent_months(months + 1):
+        url = f"{_VISION_BASE}/data/{market}/monthly/klines/{symbol}/{interval}/{symbol}-{interval}-{ym}.zip"
+        try:
+            with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
+                blob = resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 404):
+                continue  # month not published yet
+            raise
+        zf = zipfile.ZipFile(io.BytesIO(blob))
+        name = zf.namelist()[0]
+        df = pd.read_csv(io.BytesIO(zf.read(name)), header=None)
+        # some recent archives ship a header row -> drop it
+        if not str(df.iloc[0, 0]).replace(".", "", 1).lstrip("-").isdigit():
+            df = df.iloc[1:].reset_index(drop=True)
+        df = df.iloc[:, :6]
+        df.columns = ["open_time", "open", "high", "low", "close", "volume"]
+        frames.append(df)
+
+    if not frames:
+        raise RuntimeError(f"no Binance Vision archives found for {symbol} {interval}")
+
+    out = pd.concat(frames, ignore_index=True)
+    ot = out["open_time"].astype("int64")
+    # tolerate ms vs µs timestamps
+    unit = "us" if ot.iloc[0] > 1e14 else "ms"
+    out.index = pd.to_datetime(ot, unit=unit, utc=True)
+    out = out[["open", "high", "low", "close", "volume"]]
+    return _normalize(out)
 
 
 def load(
