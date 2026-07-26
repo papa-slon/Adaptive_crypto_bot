@@ -32,9 +32,20 @@ from algo_engine.carry_bot.scanner import (
 from algo_engine.data import fetch_binance_vision_funding
 
 UNIVERSE = [
+    # majors — the competed-away end of the curve
     "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT",
     "ADAUSDT", "AVAXUSDT", "LINKUSDT", "DOTUSDT", "LTCUSDT", "TRXUSDT",
-    "NEARUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "FILUSDT",
+    "BCHUSDT", "ETCUSDT", "XLMUSDT", "ATOMUSDT", "FILUSDT", "ICPUSDT",
+    # mid caps
+    "NEARUSDT", "APTUSDT", "ARBUSDT", "OPUSDT", "SUIUSDT", "INJUSDT",
+    "TIAUSDT", "SEIUSDT", "RUNEUSDT", "AAVEUSDT", "UNIUSDT", "MKRUSDT",
+    "LDOUSDT", "GRTUSDT", "SANDUSDT", "MANAUSDT", "AXSUSDT", "GALAUSDT",
+    "APEUSDT", "CRVUSDT", "COMPUSDT", "SNXUSDT", "DYDXUSDT", "IMXUSDT",
+    # small / high-beta / meme — where funding actually gets paid
+    "PEPEUSDT", "WIFUSDT", "BONKUSDT", "FLOKIUSDT", "1000SATSUSDT",
+    "ORDIUSDT", "JUPUSDT", "PYTHUSDT", "STRKUSDT", "WLDUSDT", "ARKMUSDT",
+    "BLURUSDT", "MEMEUSDT", "JASMYUSDT", "PENDLEUSDT", "ENAUSDT",
+    "NOTUSDT", "IOUSDT", "ZKUSDT", "LISTAUSDT", "BANANAUSDT", "TONUSDT",
 ]
 MONTHS = 12
 LOOKBACK_DAYS = 14        # trailing window the scanner ranks on
@@ -46,7 +57,11 @@ SWITCH_EDGE = 1.4         # a replacement must be this much better
 MIN_HOLD_MINUTES = 4320.0 # 3 days: a round trip costs ~0.3% of notional
 LEVERAGE = 1.0            # perp leg leverage (capital = notional * (1 + 1/L))
 FEE_PER_LEG = 0.00055     # taker, per side
+# Slippage is NOT uniform: a small-cap perp costs far more to cross than BTC.
+# Using BTC-grade slippage on meme coins is the classic way to fake an edge.
 SLIP_PER_LEG = 0.0002
+SLIP_SMALLCAP = 0.0012    # applied to anything outside the top-24 majors
+MAJORS = set(UNIVERSE[:24])
 SETTLEMENTS_PER_DAY = 3
 
 
@@ -77,7 +92,10 @@ def simulate(series: dict[str, list], top_k: int, leverage: float,
         return {}
 
     cap_mult = capital_multiplier(leverage)
-    switch_cost = 2 * (FEE_PER_LEG + SLIP_PER_LEG) * 2   # open+close, two legs
+
+    def switch_cost_for(symbol: str) -> float:
+        slip = SLIP_PER_LEG if symbol in MAJORS else SLIP_SMALLCAP
+        return 2 * (FEE_PER_LEG + slip) * 2      # open+close, two legs
     equity = 1.0
     peak = 1.0
     max_dd = 0.0
@@ -119,17 +137,19 @@ def simulate(series: dict[str, list], top_k: int, leverage: float,
                 exit_funding=EXIT_FUNDING, switch_edge=SWITCH_EDGE,
                 min_hold_minutes=MIN_HOLD_MINUTES)
             # each closed or opened slot pays its share of the round trip
-            moves = len(to_close) + len(to_open)
-            if moves:
-                equity -= equity * (moves / (2.0 * max(top_k, 1))) * switch_cost / cap_mult
-                switches += moves
+            moved = [c.symbol for c in to_open] + list(to_close)
+            if moved:
+                # charge each leg its OWN cost, not a blended one
+                cost = sum(switch_cost_for(sym) for sym in moved) / (2.0 * max(top_k, 1))
+                equity -= equity * cost / cap_mult
+                switches += len(moved)
             for sym in to_close:
                 held.remove(sym); opened_at.pop(sym, None)
             for c in to_open:
                 held.append(c.symbol); opened_at[c.symbol] = i; picks_log[c.symbol] += 1
         elif not rotate and not held and i >= lookback:
             held = [UNIVERSE[0]]          # BTC-only baseline
-            equity -= equity * switch_cost / cap_mult
+            equity -= equity * switch_cost_for(UNIVERSE[0]) / cap_mult
 
         peak = max(peak, equity)
         if peak > 0:
@@ -167,6 +187,20 @@ def main() -> int:
         rows.append((sym, st))
     for sym, st in sorted(rows, key=lambda r: -r[1]["mean"]):
         print(f"| {sym} | {st['n']} | {st['mean']*100:+.4f}% | {annualise(st['mean']):+.1f}% |")
+
+    # Does the high-funding tail exist at all, and is it big enough to matter?
+    means = sorted((st["mean"] for _, st in rows), reverse=True)
+    if means:
+        def pct(p):
+            return means[min(int(len(means) * p), len(means) - 1)]
+        print("\n## Funding distribution — is there a tail worth chasing?\n")
+        print(f"  best coin      : {annualise(means[0]):+.1f}%/yr naive")
+        print(f"  top decile     : {annualise(pct(0.10)):+.1f}%/yr")
+        print(f"  top quartile   : {annualise(pct(0.25)):+.1f}%/yr")
+        print(f"  median         : {annualise(pct(0.50)):+.1f}%/yr")
+        print(f"  coins positive : {sum(1 for m in means if m > 0)}/{len(means)}")
+        print(f"\n  On capital at 1x (halved by the spot+margin requirement), the top")
+        print(f"  decile would yield about {annualise(pct(0.10))/2:+.1f}%/yr BEFORE costs.")
 
     print("\n## Strategy comparison\n")
     print("| strategy | ann. yield on capital | total | maxDD | switches |")
