@@ -1,0 +1,27 @@
+# algo_engine live config — Bybit DEMO by default.
+# Run:  python -m algo_engine.cli live --config algo_engine/configs/default.yaml
+#
+# Keys come from environment (NEVER put them here):
+#   BYBIT_API_KEY, BYBIT_API_SECRET
+# If those are absent, the loop runs in PAPER mode (no real orders).
+# Live (real money) additionally requires demo: false AND env AE_ALLOW_LIVE=1.
+
+symbol: BTCUSDT
+interval_min: 5
+strategy: trend_breakout      # or: mean_reversion
+strategy_params: {}           # override strategy ctor args here if you want
+
+initial_equity: 10000.0       # only used in paper mode; real equity read from broker
+fee: 0.00055
+slippage: 0.0005
+
+demo: true                    # Bybit demo endpoint (api-demo.bybit.com)
+poll_seconds: 10
+history_days: 10.0
+
+risk:
+  risk_pct: 0.005             # 0.5% of equity risked per trade
+  max_leverage: 5.0
+  daily_loss_limit: -0.06     # halt NEW entries after -6% on the day
+  max_drawdown: -0.25         # KILL everything at -25% from peak equity
+  min_notional: 5.0

@@ -1,0 +1,37 @@
+name: carry sweep (real data)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - claude/crypto-algo-trading-bot-sti7oe
+    paths:
+      - "algo_engine/scripts/run_carry.py"
+      - "algo_engine/scripts/run_carry_regimes.py"
+      - "algo_engine/scripts/run_carry_portfolio.py"
+      - "algo_engine/carry.py"
+      - "algo_engine/carry_bot/**"
+      - ".github/workflows/carry-sweep.yml"
+
+jobs:
+  carry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy pyyaml
+      - name: Run delta-neutral funding carry sweep
+        run: python -m algo_engine.scripts.run_carry
+      - name: Run carry across regimes & leverage
+        run: python -m algo_engine.scripts.run_carry_regimes
+      - name: Portfolio carry with the funding scanner (multi-coin rotation)
+        run: python -m algo_engine.scripts.run_carry_portfolio
+      - name: Paper-trade the carry bot (recent, 1x)
+        run: python -m algo_engine.carry_bot.run --symbol BTCUSDT --months 8 --leverage 1
+      - name: Paper-trade the carry bot (bull window, 3x — exercises margin top-ups)
+        run: python -m algo_engine.carry_bot.run --symbol BTCUSDT --months 7 --leverage 3 --end-month 2025-02

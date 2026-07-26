@@ -1,0 +1,36 @@
+services:
+  carry-bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: carry-bot:latest
+    container_name: carry-bot
+    env_file: .env                 # ONLY a password + tuning; keys go in the web UI
+    environment:
+      BOT_CONFIG_PATH: /app/logs/bot_config.enc   # encrypted, on the volume
+    restart: unless-stopped        # auto-restart on crash/reboot
+    volumes:
+      - ./logs:/app/logs           # log + encrypted config + published state
+    stop_grace_period: 30s         # give the bot time to unwind on stop
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+  dashboard:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: carry-bot:latest
+    container_name: carry-dashboard
+    entrypoint: ["python", "-m", "algo_engine.carry_bot.dashboard", "--port", "8080"]
+    env_file: .env                 # BOT_ADMIN_PASSWORD guards /settings
+    environment:
+      BOT_CONFIG_PATH: /app/logs/bot_config.enc
+    restart: unless-stopped
+    depends_on: [carry-bot]
+    volumes:
+      - ./logs:/app/logs           # reads the same state the bot writes
+    ports:
+      - "8080:8080"                # open http://<server-ip>:8080
