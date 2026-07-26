@@ -87,6 +87,61 @@ class StateWriter:
             pass
 
 
+class PortfolioStateWriter(StateWriter):
+    """Same atomic write, for the multi-slot autopilot."""
+
+
+def build_portfolio_snapshot(pilot, args, started_at: float) -> dict:
+    """Flatten the autopilot's live slots into what the dashboard renders."""
+    def safe(fn, default=None):
+        try:
+            return fn()
+        except Exception:  # noqa: BLE001 — a venue read must not break the writer
+            return default
+
+    slots = []
+    equity_total = 0.0
+    funding_total = 0.0
+    for sym, slot in pilot.slots.items():
+        eq = safe(slot.venue.equity)
+        fund = getattr(slot.venue, "funding_collected", 0.0) or 0.0
+        cand = slot.candidate
+        slots.append({
+            "symbol": sym,
+            "state": slot.bot.state,
+            "price": safe(slot.venue.mark_price),
+            "spot_qty": safe(slot.venue.spot_base_qty),
+            "perp_qty": safe(slot.venue.perp_short_qty),
+            "margin_ratio": safe(slot.venue.perp_margin_ratio),
+            "funding_collected": fund,
+            "funding_rate": cand.mean_funding if cand else None,
+            "ann_pct": cand.ann_pct if cand else None,
+            "held_minutes": int((time.time() - slot.opened_at) / 60),
+        })
+        funding_total += fund
+        if eq:
+            equity_total = eq          # unified account: equity is account-wide
+
+    return {
+        "ts": _now_iso(),
+        "started_at": datetime.fromtimestamp(started_at, timezone.utc).isoformat(timespec="seconds"),
+        "uptime_seconds": int(time.time() - started_at),
+        "mode": getattr(args, "venue", "?"),
+        "kind": "portfolio",
+        "state": "HOLD" if slots else "SCANNING",
+        "capital": getattr(args, "capital", None),
+        "leverage": getattr(args, "leverage", None),
+        "slots_target": getattr(args, "slots", None),
+        "slots_open": len(slots),
+        "notional_per_slot": pilot.slot_notional(),
+        "equity": equity_total or None,
+        "funding_collected": funding_total,
+        "slots": slots,
+        "actions": list(pilot.actions),
+        "errors": 0,
+    }
+
+
 def read_state(state_path: str = STATE_PATH) -> dict | None:
     try:
         with open(state_path, encoding="utf-8") as f:
