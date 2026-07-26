@@ -181,7 +181,7 @@ def main() -> int:
               f"{r['max_drawdown']*100:.2f}% | {r['switches']} |")
 
     if scanner.get("most_picked"):
-        print("\nMost-picked coins by the scanner: " +
+        print("\nCoins the scanner ENTERED (new entries, not holdings): " +
               ", ".join(f"{s} ({n}x)" for s, n in scanner["most_picked"]))
 
     print("\n## Sensitivity — how many slots and how much leverage\n")

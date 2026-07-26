@@ -208,6 +208,11 @@ def main() -> int:
     if ("demo" not in args.venue and "test" not in args.venue) and not args.yes_mainnet:
         print(f"Refusing real-money venue '{args.venue}' without --yes-mainnet.")
         return 2
+    if args.slots < 2:
+        # a single-slot scanner tested NEGATIVE at every leverage: one coin's
+        # funding turning is then the entire book
+        print("Refusing --slots 1: single-slot carry backtested negative. Use 2 or more.")
+        return 2
     keys = resolve_keys(args.venue)
     if not keys:
         prefix = "BYBIT" if args.venue.startswith("bybit") else "BINGX"

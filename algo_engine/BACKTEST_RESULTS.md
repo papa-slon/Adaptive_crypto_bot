@@ -159,3 +159,56 @@ generalizing edge.** Direction-prediction loses; the grid (a primitive
 market-maker) only breaks even. The realistic positive-expectancy path at low
 TF is market-making INCOME (spread + funding + maker rebates), not direction
 prediction — or moving to higher timeframes where direction has signal (4h).
+
+---
+
+# CORRECTED RESULTS (after the code review)
+
+Two accounting errors were found and fixed; every leveraged number published
+above this line was overstated.
+
+**1. The perp margin was treated as free.** A carry slot ties up the spot
+notional (paid in cash) PLUS the perp margin (notional / L), so the tradeable
+notional per unit of capital is `L/(L+1)`, not `L`. Leverage improves capital
+efficiency from 2.0x capital per unit notional down toward 1.0x — it does not
+multiply exposure. Corrected yields on a steady 0.01%/8h funding regime:
+
+| perp leverage | capital per unit notional | ann. yield on capital |
+|---|---|---|
+| 1x | 2.00x | +5.3% |
+| 3x | 1.33x | +8.0% |
+| 5x | 1.20x | +8.9% |
+
+(The previously published "+55% at 5x" was this error, not an edge.)
+
+**2. Backtest and live ran different rotation policies.** The portfolio
+backtest rotated on every weekly re-rank; the live autopilot had anti-churn.
+A rotation is four taker fills ≈ 0.3% of notional, so weekly rotation costs
+~6.5%/yr — more than the entire funding edge. `decide_rotation()` is now a
+single pure function used by both.
+
+| portfolio backtest (18 coins, 12 months, real funding) | ann. yield | maxDD | switches |
+|---|---|---|---|
+| scanner, rotate-on-every-rerank (the bug) | **−5.02%** | 5.03% | 131 |
+| scanner, shipped anti-churn policy | **+1.10%** | 0.13% | 15 |
+| BTC-only buy-and-hold carry | **+1.50%** | 0.21% | 0 |
+
+## What this actually means
+
+**In the current funding regime the carry pays ~1.5%/yr on deployed capital,
+and the scanner does NOT beat simply holding the best single payer.** Universe
+mean funding over the last 12 months was ~+3%/yr naive; halved by the 2x
+capital requirement at 1x leverage, that is the whole edge. Best shipped
+configuration measured: top_k=2 at 3x → **+1.94%/yr at 0.20% drawdown**.
+
+Sensitivity (1x leverage): top_k=1 **−1.13%** (one coin's funding turning is
+the whole book — now refused in config), top_k=2 +1.29%, top_k=3 +1.10%,
+top_k=5 +1.21%.
+
+Honest conclusion: the machinery is correct and safe, but **this is a
+money-market-like return, not a trading edge**, and it carries exchange,
+key-custody and liquidation risk that a deposit does not. It is worth running
+on demo to validate the plumbing; it is NOT worth real capital at these rates.
+The same machine pays materially more when funding rises (a bull regime pays
+several times the current rate) — the strategy is a funding-regime play, and
+the regime is currently dry.
