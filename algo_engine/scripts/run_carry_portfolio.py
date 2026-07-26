@@ -70,6 +70,21 @@ def capital_multiplier(leverage: float) -> float:
     return 1.0 + 1.0 / max(leverage, 1e-9)
 
 
+def settlements_per_day(rows: list) -> float:
+    """Derive the ACTUAL settlement cadence from the timestamps.
+
+    Not every perp funds every 8h: many settle 4h and a few hourly. Annualising
+    all of them at a fixed 3/day understated the 4h coins by ~2x in both the
+    reported yield and the scanner's ranking signal.
+    """
+    if len(rows) < 2:
+        return SETTLEMENTS_PER_DAY
+    span_days = (rows[-1][0] - rows[0][0]).total_seconds() / 86400.0
+    if span_days <= 0:
+        return SETTLEMENTS_PER_DAY
+    return max(1.0, min(24.0, (len(rows) - 1) / span_days))
+
+
 def load_universe(months: int) -> dict[str, list]:
     series: dict[str, list] = {}
     for sym in UNIVERSE:
@@ -179,28 +194,37 @@ def main() -> int:
 
     # what the market paid, per symbol, over the whole window
     print("## Funding actually paid per symbol (whole window)\n")
-    print("| symbol | settlements | mean per 8h | naive annualised |")
-    print("|---|---|---|---|")
+    print("| symbol | settlements | per day | mean per settlement | annualised |")
+    print("|---|---|---|---|---|")
     rows = []
     for sym, data in series.items():
         st = stats_from_series([v for _, v in data])
+        per_day = settlements_per_day(data)
+        st["per_day"] = per_day
+        # annualise at the symbol's OWN cadence, and require a real sample
+        st["ann"] = st["mean"] * per_day * 365.0 * 100.0
+        st["thin"] = st["n"] < 400
         rows.append((sym, st))
-    for sym, st in sorted(rows, key=lambda r: -r[1]["mean"]):
-        print(f"| {sym} | {st['n']} | {st['mean']*100:+.4f}% | {annualise(st['mean']):+.1f}% |")
+    for sym, st in sorted(rows, key=lambda r: -r[1]["ann"]):
+        print(f"| {sym} | {st['n']} | {st['per_day']:.1f} | {st['mean']*100:+.4f}% | "
+              f"{st['ann']:+.1f}% |")
 
     # Does the high-funding tail exist at all, and is it big enough to matter?
-    means = sorted((st["mean"] for _, st in rows), reverse=True)
+    # judge the tail on properly annualised, non-stub samples only
+    anns = sorted((st["ann"] for _, st in rows if not st["thin"]), reverse=True)
+    means = anns
     if means:
         def pct(p):
             return means[min(int(len(means) * p), len(means) - 1)]
         print("\n## Funding distribution — is there a tail worth chasing?\n")
-        print(f"  best coin      : {annualise(means[0]):+.1f}%/yr naive")
-        print(f"  top decile     : {annualise(pct(0.10)):+.1f}%/yr")
-        print(f"  top quartile   : {annualise(pct(0.25)):+.1f}%/yr")
-        print(f"  median         : {annualise(pct(0.50)):+.1f}%/yr")
+        print(f"  (stub samples under 400 settlements excluded)")
+        print(f"  best coin      : {means[0]:+.1f}%/yr")
+        print(f"  top decile     : {pct(0.10):+.1f}%/yr")
+        print(f"  top quartile   : {pct(0.25):+.1f}%/yr")
+        print(f"  median         : {pct(0.50):+.1f}%/yr")
         print(f"  coins positive : {sum(1 for m in means if m > 0)}/{len(means)}")
         print(f"\n  On capital at 1x (halved by the spot+margin requirement), the top")
-        print(f"  decile would yield about {annualise(pct(0.10))/2:+.1f}%/yr BEFORE costs.")
+        print(f"  decile would yield about {pct(0.10)/2:+.1f}%/yr BEFORE costs.")
 
     print("\n## Strategy comparison\n")
     print("| strategy | ann. yield on capital | total | maxDD | switches |")

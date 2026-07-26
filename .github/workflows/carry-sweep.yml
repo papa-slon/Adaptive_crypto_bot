@@ -8,6 +8,7 @@ on:
     paths:
       - "algo_engine/scripts/run_carry.py"
       - "algo_engine/scripts/run_carry_regimes.py"
+      - "algo_engine/scripts/run_carry_portfolio.py"
       - "algo_engine/carry.py"
       - "algo_engine/carry_bot/**"
       - ".github/workflows/carry-sweep.yml"
