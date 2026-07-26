@@ -1,0 +1,18 @@
+[Unit]
+Description=Carry bot dashboard + settings UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/apps/carry_bot
+EnvironmentFile=/home/ubuntu/apps/carry_bot/.env
+ExecStart=/home/ubuntu/apps/carry_bot/.venv/bin/python -m algo_engine.carry_bot.dashboard --port 8090
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
