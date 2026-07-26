@@ -70,6 +70,58 @@ def rank_candidates(stats: dict[str, dict], top_n: int = 3, min_obs: int = 20,
     return out[:top_n]
 
 
+def decide_rotation(held: list[str], ranked: list[Candidate], n_slots: int,
+                    held_minutes: dict[str, float] | None = None,
+                    exit_funding: float = 0.0, switch_edge: float = 1.4,
+                    min_hold_minutes: float = 4320.0) -> tuple[list[str], list[Candidate]]:
+    """Decide which slots to close and which candidates to open — PURE, so the
+    live autopilot and the historical backtest run the identical policy.
+
+    Rotation is expensive: closing one carry and opening another is four taker
+    fills (~0.3% of notional). Measured over a year, rotating on every weekly
+    re-rank costs more than the entire funding edge. So a held slot is only
+    given up when:
+      * its funding actually went bad (below `exit_funding`), or
+      * a candidate is `switch_edge` times better AND the slot has been held at
+        least `min_hold_minutes`.
+
+    Returns (symbols_to_close, candidates_to_open).
+    """
+    held_minutes = held_minutes or {}
+    by_symbol = {c.symbol: c for c in ranked}
+    to_close: list[str] = []
+
+    # 1) a coin that now PAYS us nothing (or charges us) is never worth holding
+    for sym in held:
+        cand = by_symbol.get(sym)
+        if cand is not None and cand.mean_funding < exit_funding:
+            to_close.append(sym)
+
+    remaining = [s for s in held if s not in to_close]
+    tradeable = [c for c in ranked if c.mean_funding >= exit_funding]
+    to_open: list[Candidate] = []
+
+    # 2) fill free capacity with the best payers we do not already hold
+    for cand in tradeable:
+        if len(remaining) + len(to_open) >= n_slots:
+            break
+        if cand.symbol not in remaining and cand.symbol not in {c.symbol for c in to_open}:
+            to_open.append(cand)
+
+    # 3) swap the weakest holding only for a decisively better payer
+    if len(remaining) + len(to_open) >= n_slots and remaining:
+        scored = [(s, by_symbol[s].score if s in by_symbol else 0.0) for s in remaining]
+        worst_sym, worst_score = min(scored, key=lambda kv: kv[1])
+        taken = set(remaining) | {c.symbol for c in to_open}
+        best = next((c for c in tradeable if c.symbol not in taken), None)
+        old_enough = held_minutes.get(worst_sym, 0.0) >= min_hold_minutes
+        if best and old_enough and worst_score > 0 and best.score > worst_score * switch_edge:
+            to_close.append(worst_sym)
+            to_open.append(best)
+
+    return to_close, to_open
+
+
 def stats_from_series(rates: list[float]) -> dict:
     """Mean/std/count for a list of funding settlements (no numpy needed)."""
     n = len(rates)

@@ -23,7 +23,12 @@ import statistics
 import traceback
 from collections import defaultdict
 
-from algo_engine.carry_bot.scanner import annualise, rank_candidates, stats_from_series
+from algo_engine.carry_bot.scanner import (
+    annualise,
+    decide_rotation,
+    rank_candidates,
+    stats_from_series,
+)
 from algo_engine.data import fetch_binance_vision_funding
 
 UNIVERSE = [
@@ -35,6 +40,10 @@ MONTHS = 12
 LOOKBACK_DAYS = 14        # trailing window the scanner ranks on
 REBALANCE_DAYS = 7        # how often the scanner re-picks
 TOP_K = 3                 # simultaneous carry slots
+# Rotation policy — identical to the live autopilot's defaults
+EXIT_FUNDING = 0.0        # drop a coin that stops paying us
+SWITCH_EDGE = 1.4         # a replacement must be this much better
+MIN_HOLD_MINUTES = 4320.0 # 3 days: a round trip costs ~0.3% of notional
 LEVERAGE = 1.0            # perp leg leverage (capital = notional * (1 + 1/L))
 FEE_PER_LEG = 0.00055     # taker, per side
 SLIP_PER_LEG = 0.0002
@@ -73,6 +82,7 @@ def simulate(series: dict[str, list], top_k: int, leverage: float,
     peak = 1.0
     max_dd = 0.0
     held: list[str] = []
+    opened_at: dict[str, int] = {}
     switches = 0
     curve = []
     picks_log: dict[str, int] = defaultdict(int)
@@ -98,18 +108,25 @@ def simulate(series: dict[str, list], top_k: int, leverage: float,
             if r is not None:
                 history[sym].append(float(r))
 
-        # 3) periodically re-rank
+        # 3) periodically re-rank, applying the SAME policy the live bot uses
         if rotate and i >= lookback and i % step == 0:
             stats = {s: stats_from_series(h[-lookback:]) for s, h in history.items()
                      if len(h) >= lookback}
-            picks = [c.symbol for c in rank_candidates(stats, top_n=top_k, min_obs=lookback // 2)]
-            if picks and picks != held:
-                changed = len(set(picks) ^ set(held))
-                equity -= equity * (changed / max(len(picks), 1)) * switch_cost / cap_mult
-                switches += changed
-                held = picks
-                for p in picks:
-                    picks_log[p] += 1
+            ranked = rank_candidates(stats, top_n=max(top_k * 3, 6), min_obs=lookback // 2)
+            held_minutes = {s: (i - opened_at.get(s, i)) * 8 * 60 for s in held}
+            to_close, to_open = decide_rotation(
+                held=held, ranked=ranked, n_slots=top_k, held_minutes=held_minutes,
+                exit_funding=EXIT_FUNDING, switch_edge=SWITCH_EDGE,
+                min_hold_minutes=MIN_HOLD_MINUTES)
+            # each closed or opened slot pays its share of the round trip
+            moves = len(to_close) + len(to_open)
+            if moves:
+                equity -= equity * (moves / (2.0 * max(top_k, 1))) * switch_cost / cap_mult
+                switches += moves
+            for sym in to_close:
+                held.remove(sym); opened_at.pop(sym, None)
+            for c in to_open:
+                held.append(c.symbol); opened_at[c.symbol] = i; picks_log[c.symbol] += 1
         elif not rotate and not held and i >= lookback:
             held = [UNIVERSE[0]]          # BTC-only baseline
             equity -= equity * switch_cost / cap_mult

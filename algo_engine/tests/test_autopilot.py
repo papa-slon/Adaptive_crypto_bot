@@ -80,7 +80,7 @@ def test_does_not_churn_for_a_marginal_improvement():
     pilot = make_pilot()
     pilot.rotate([cand("AUSDT", 0.0004), cand("BUSDT", 0.0003)])
     for s in pilot.slots.values():
-        s.opened_at = time.time() - 10 * 3600            # long past the min hold
+        s.opened_at = time.time() - 6 * 86400            # long past the 3-day min hold
     before = set(pilot.slots)
     # CUSDT is only ~13% better than the worst held — below the switch_edge
     pilot.rotate([cand("AUSDT", 0.0004), cand("CUSDT", 0.00034), cand("BUSDT", 0.0003)])
@@ -91,7 +91,7 @@ def test_rotates_when_the_edge_is_large():
     pilot = make_pilot()
     pilot.rotate([cand("AUSDT", 0.0004), cand("BUSDT", 0.0001)])
     for s in pilot.slots.values():
-        s.opened_at = time.time() - 10 * 3600
+        s.opened_at = time.time() - 6 * 86400
     pilot.rotate([cand("AUSDT", 0.0004), cand("BIGUSDT", 0.0009), cand("BUSDT", 0.0001)])
     assert "BIGUSDT" in pilot.slots and "BUSDT" not in pilot.slots
 

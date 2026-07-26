@@ -27,7 +27,7 @@ import time
 from collections import deque
 
 from algo_engine.carry_bot.bot import CarryBot, CarryBotConfig
-from algo_engine.carry_bot.scanner import Candidate, annualise, rank_candidates
+from algo_engine.carry_bot.scanner import Candidate, decide_rotation, rank_candidates
 from algo_engine.carry_bot.state import PortfolioStateWriter, build_portfolio_snapshot
 from algo_engine.carry_bot.venues import PreflightError, build_venue, venue_choices
 
@@ -65,7 +65,9 @@ class Autopilot:
     def __init__(self, venue_name: str, keys: tuple[str, str], capital: float,
                  slots: int, leverage: float, log: logging.Logger,
                  exit_funding: float = 0.0, switch_edge: float = 1.4,
-                 min_hold_minutes: float = 240.0):
+                 # rotation costs ~0.3% of notional (4 taker fills), so the
+                 # minimum hold is measured in DAYS, not hours
+                 min_hold_minutes: float = 4320.0):
         self.venue_name = venue_name
         self.keys = keys
         self.capital = capital
@@ -139,39 +141,24 @@ class Autopilot:
         self.slots.pop(symbol, None)
 
     def rotate(self, ranked: list[Candidate]) -> None:
-        """Fill empty slots, and swap a held coin only when it is clearly worth
-        the round-trip cost."""
-        by_symbol = {c.symbol: c for c in ranked}
-
-        # 1) drop slots whose own funding has turned bad
-        for sym in list(self.slots):
-            cand = by_symbol.get(sym)
-            if cand is not None and cand.mean_funding < self.exit_funding:
-                self.close_slot(sym, f"funding turned {cand.mean_funding*100:+.4f}%/8h")
-
-        # 2) fill free capacity with the best candidates we do not already hold.
-        #    Only coins that actually pay us: without this filter a coin dropped
-        #    in step 1 would be re-opened on the same pass.
-        tradeable = [c for c in ranked if c.mean_funding >= self.exit_funding]
-        for cand in tradeable:
-            if len(self.slots) >= self.n_slots:
-                break
-            if cand.symbol not in self.slots:
-                self.open_slot(cand)
-
-        # 3) considered swaps — only with a real edge and after a minimum hold
-        if len(self.slots) >= self.n_slots and tradeable:
-            held = [(s, by_symbol.get(s)) for s in self.slots]
-            held_scored = [(s, c.score if c else 0.0) for s, c in held]
-            worst_sym, worst_score = min(held_scored, key=lambda kv: kv[1])
-            best = next((c for c in tradeable if c.symbol not in self.slots), None)
-            slot = self.slots.get(worst_sym)
-            held_long_enough = slot and (time.time() - slot.opened_at) / 60.0 >= self.min_hold_minutes
-            if best and held_long_enough and worst_score > 0 and best.score > worst_score * self.switch_edge:
-                self._act(f"ROTATE {worst_sym} -> {best.symbol} "
-                          f"(score {worst_score:.6f} -> {best.score:.6f})")
-                self.close_slot(worst_sym, "rotated out for a better payer")
-                self.open_slot(best)
+        """Apply the shared rotation policy — the SAME pure decision function
+        the historical backtest runs, so measured behaviour equals live
+        behaviour."""
+        now = time.time()
+        held_minutes = {s: (now - slot.opened_at) / 60.0 for s, slot in self.slots.items()}
+        to_close, to_open = decide_rotation(
+            held=list(self.slots),
+            ranked=ranked,
+            n_slots=self.n_slots,
+            held_minutes=held_minutes,
+            exit_funding=self.exit_funding,
+            switch_edge=self.switch_edge,
+            min_hold_minutes=self.min_hold_minutes,
+        )
+        for sym in to_close:
+            self.close_slot(sym, "rotation policy")
+        for cand in to_open:
+            self.open_slot(cand)
 
     def step_all(self) -> None:
         for sym in list(self.slots):
