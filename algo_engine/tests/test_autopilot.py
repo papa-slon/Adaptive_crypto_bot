@@ -127,3 +127,24 @@ def test_empty_scan_holds_position_instead_of_closing():
     pilot.rotate([cand("AUSDT", 0.0004)])
     pilot.rotate([])                                     # scanner returned nothing
     assert "AUSDT" in pilot.slots, "a failed scan must not liquidate the book"
+
+
+def test_mainnet_from_stored_config_is_still_refused(tmp_path, monkeypatch, capsys):
+    """The venue can come from the encrypted store, so the real-money guard must
+    check the RESOLVED venue — not just the command-line default."""
+    from algo_engine.carry_bot.secrets_store import HAVE_CRYPTO, SecretsStore
+
+    if not HAVE_CRYPTO:
+        pytest.skip("cryptography not installed")
+
+    cfg_path = tmp_path / "cfg.enc"
+    monkeypatch.setenv("BOT_ADMIN_PASSWORD", "pw")
+    monkeypatch.setenv("BOT_CONFIG_PATH", str(cfg_path))
+    SecretsStore(str(cfg_path), password="pw").save({
+        "venue": "bingx-mainnet", "api_key": "k", "api_secret": "s",
+        "capital": 200.0, "slots": 3, "leverage": 1.0,
+    })
+    monkeypatch.setattr("sys.argv", ["autopilot"])          # no --yes-mainnet
+
+    assert ap.main() == 2
+    assert "Refusing real-money venue 'bingx-mainnet'" in capsys.readouterr().out

@@ -5,10 +5,12 @@ services:
       dockerfile: deploy/Dockerfile
     image: carry-bot:latest
     container_name: carry-bot
-    env_file: .env                 # keys + sizing live ONLY here, on the server
+    env_file: .env                 # ONLY a password + tuning; keys go in the web UI
+    environment:
+      BOT_CONFIG_PATH: /app/logs/bot_config.enc   # encrypted, on the volume
     restart: unless-stopped        # auto-restart on crash/reboot
     volumes:
-      - ./logs:/app/logs           # logs/carry_bot.log persists on the host
+      - ./logs:/app/logs           # log + encrypted config + published state
     stop_grace_period: 30s         # give the bot time to unwind on stop
     logging:
       driver: json-file
@@ -23,6 +25,9 @@ services:
     image: carry-bot:latest
     container_name: carry-dashboard
     entrypoint: ["python", "-m", "algo_engine.carry_bot.dashboard", "--port", "8080"]
+    env_file: .env                 # BOT_ADMIN_PASSWORD guards /settings
+    environment:
+      BOT_CONFIG_PATH: /app/logs/bot_config.enc
     restart: unless-stopped
     depends_on: [carry-bot]
     volumes:

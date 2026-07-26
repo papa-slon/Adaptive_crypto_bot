@@ -2,7 +2,7 @@
 FROM python:3.11-slim
 
 WORKDIR /app
-RUN pip install --no-cache-dir pandas numpy
+RUN pip install --no-cache-dir pandas numpy cryptography
 
 # only the engine is needed at runtime
 COPY algo_engine /app/algo_engine

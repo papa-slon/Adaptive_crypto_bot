@@ -14,10 +14,16 @@ with auth. Pass --host 127.0.0.1 to make that the default.
 from __future__ import annotations
 
 import argparse
+import base64
+import hmac
 import json
+import os
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from algo_engine.carry_bot.secrets_store import SecretsStore, SecretsUnavailable
 from algo_engine.carry_bot.state import read_history, read_state
+from algo_engine.carry_bot.venues import venue_choices
 
 _PAGE = r"""<!doctype html>
 <html lang="en"><head>
@@ -179,6 +185,93 @@ tick();setInterval(tick,5000);
 </script></body></html>"""
 
 
+# --------------------------------------------------------------- settings UI
+def _settings_page(cfg: dict, venues: list[str], message: str = "", error: str = "") -> str:
+    """Credential + sizing form. Secrets are WRITE-ONLY: the current values are
+    shown only as fingerprints and an empty field means "keep what is stored"."""
+    opts = "".join(
+        f'<option value="{v}"{" selected" if cfg.get("venue") == v else ""}>{v}</option>'
+        for v in venues)
+    banner = ""
+    if message:
+        banner = f'<div class="card" style="border-color:#16c784"><b>{message}</b></div>'
+    elif error:
+        banner = f'<div class="card" style="border-color:#ea3943"><b>{error}</b></div>'
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>CARRY · settings</title>
+<style>
+ body{{background:#080b11;color:#d8e2ee;font-family:'JetBrains Mono',Consolas,monospace;
+      font-size:13px;margin:0}}
+ header{{padding:12px 18px;border-bottom:1px solid #1c2836}}
+ .mark{{font-weight:700;letter-spacing:.22em}}
+ a{{color:#3da9fc}}
+ .wrap{{max-width:620px;margin:22px auto;padding:0 16px;display:grid;gap:14px}}
+ .card{{background:#0e151f;border:1px solid #1c2836;border-radius:10px;padding:16px}}
+ label{{display:block;margin:12px 0 4px;color:#6b7d93;font-size:11px;
+        letter-spacing:.12em;text-transform:uppercase}}
+ input,select{{width:100%;padding:9px 10px;background:#121b27;color:#d8e2ee;
+        border:1px solid #1c2836;border-radius:6px;font-family:inherit;font-size:13px}}
+ button{{margin-top:16px;padding:10px 18px;background:#16c784;color:#04140d;border:0;
+         border-radius:6px;font-weight:700;font-family:inherit;cursor:pointer}}
+ .muted{{color:#6b7d93;font-size:11.5px;line-height:1.6}}
+ .row{{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}}
+</style></head><body>
+<header><span class="mark">◢ CARRY</span> · settings &nbsp; <a href="/">← dashboard</a></header>
+<div class="wrap">
+{banner}
+<form class="card" method="post" action="/settings">
+  <label>Exchange</label>
+  <select name="venue">{opts}</select>
+
+  <label>API key</label>
+  <input name="api_key" autocomplete="off" placeholder="{cfg.get('api_key') or 'not set'}">
+  <label>API secret</label>
+  <input name="api_secret" type="password" autocomplete="off"
+         placeholder="{cfg.get('api_secret') or 'not set'}">
+  <div class="muted">Leave a field blank to keep the stored value. Stored values are
+  never sent back to the browser — only the fingerprint above.</div>
+
+  <div class="row">
+    <div><label>Capital (USDT)</label>
+      <input name="capital" value="{cfg.get('capital', 200)}"></div>
+    <div><label>Slots</label>
+      <input name="slots" value="{cfg.get('slots', 3)}"></div>
+    <div><label>Leverage</label>
+      <input name="leverage" value="{cfg.get('leverage', 1)}"></div>
+  </div>
+  <button type="submit">Save</button>
+</form>
+<div class="card muted">
+  Credentials are encrypted on this host with a key derived from
+  <code>BOT_ADMIN_PASSWORD</code>, which is never written to disk — a stolen disk
+  image or backup is useless without it. It does <b>not</b> protect against an
+  attacker who already controls this running host, so use an exchange key with
+  <b>trading only, no withdrawal</b>, ideally IP-restricted to this server.
+  Restart the bot for a change to take effect.
+</div>
+</div></body></html>"""
+
+
+def _admin_password() -> str:
+    return os.environ.get("BOT_ADMIN_PASSWORD", "")
+
+
+def _authorised(header: str | None) -> bool:
+    """HTTP Basic against BOT_ADMIN_PASSWORD (any username), compared in
+    constant time. No password configured => the settings UI stays closed."""
+    expected = _admin_password()
+    if not expected or not header or not header.startswith("Basic "):
+        return False
+    try:
+        raw = base64.b64decode(header[6:]).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001
+        return False
+    _, _, supplied = raw.partition(":")
+    return hmac.compare_digest(supplied, expected)
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype):
         self.send_response(code)
@@ -187,15 +280,81 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    # ---- auth ----
+    def _deny(self) -> None:
+        body = b"settings require BOT_ADMIN_PASSWORD"
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="carry-bot settings"')
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _guard(self) -> bool:
+        if _authorised(self.headers.get("Authorization")):
+            return True
+        self._deny()
+        return False
+
     def do_GET(self):  # noqa: N802
         if self.path.startswith("/api/state"):
             self._send(200, json.dumps(read_state() or {}).encode(), "application/json")
         elif self.path.startswith("/api/history"):
             self._send(200, json.dumps(read_history(limit=1500)).encode(), "application/json")
+        elif self.path.startswith("/settings"):
+            if not self._guard():
+                return
+            store = SecretsStore()
+            page = _settings_page(store.redacted(), venue_choices())
+            self._send(200, page.encode(), "text/html; charset=utf-8")
         elif self.path in ("/", "/index.html"):
             self._send(200, _PAGE.encode(), "text/html; charset=utf-8")
         else:
             self._send(404, b"not found", "text/plain")
+
+    def do_POST(self):  # noqa: N802
+        if not self.path.startswith("/settings"):
+            self._send(404, b"not found", "text/plain")
+            return
+        if not self._guard():
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(min(length, 64_000)).decode("utf-8", "replace")
+        form = {k: v[0] for k, v in urllib.parse.parse_qs(raw, keep_blank_values=True).items()}
+
+        store = SecretsStore()
+        message = error = ""
+        try:
+            current = store.load() if store.exists() else {}
+            merged = dict(current)
+            merged["venue"] = form.get("venue") or current.get("venue") or "bybit-demo"
+            # a blank secret field means "keep what is stored"
+            for field in ("api_key", "api_secret"):
+                supplied = (form.get(field) or "").strip()
+                if supplied:
+                    merged[field] = supplied
+            for field, cast in (("capital", float), ("slots", int), ("leverage", float)):
+                try:
+                    merged[field] = cast(form.get(field) or current.get(field) or 0)
+                except (TypeError, ValueError):
+                    pass
+            if int(merged.get("slots") or 0) < 2:
+                raise ValueError("slots must be 2 or more: a single-slot carry "
+                                 "backtested negative at every leverage")
+            store.save(merged)
+            message = "Saved. Restart the bot to apply."
+        except SecretsUnavailable as exc:
+            error = str(exc)
+        except ValueError as exc:
+            error = str(exc)
+        except Exception as exc:  # noqa: BLE001 — never leak a stack trace to the browser
+            error = f"could not save: {type(exc).__name__}"
+
+        page = _settings_page(store.redacted(), venue_choices(), message=message, error=error)
+        self._send(200, page.encode(), "text/html; charset=utf-8")
 
     def log_message(self, *a):  # silence per-request logging
         return

@@ -28,10 +28,17 @@ from collections import deque
 
 from algo_engine.carry_bot.bot import CarryBot, CarryBotConfig
 from algo_engine.carry_bot.scanner import Candidate, decide_rotation, rank_candidates
+from algo_engine.carry_bot.secrets_store import resolve_runtime_config
 from algo_engine.carry_bot.state import PortfolioStateWriter, build_portfolio_snapshot
 from algo_engine.carry_bot.venues import PreflightError, build_venue, venue_choices
 
 LOG_PATH = "logs/carry_bot.log"
+
+# CLI defaults; a value left at its default defers to the stored config
+DEFAULT_VENUE = "bybit-demo"
+DEFAULT_CAPITAL = 200.0
+DEFAULT_SLOTS = 3
+DEFAULT_LEVERAGE = 1.0
 
 
 def _logger() -> logging.Logger:
@@ -194,42 +201,62 @@ def _env(name: str, default):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Hands-off multi-coin funding carry")
-    ap.add_argument("--venue", default=os.environ.get("CARRY_VENUE", "bybit-demo"),
+    ap.add_argument("--venue", default=os.environ.get("CARRY_VENUE", DEFAULT_VENUE),
                     choices=venue_choices())
-    ap.add_argument("--capital", type=float, default=_env("CARRY_CAPITAL", 200.0),
+    ap.add_argument("--capital", type=float, default=_env("CARRY_CAPITAL", DEFAULT_CAPITAL),
                     help="total USDT the bot may deploy across all slots")
-    ap.add_argument("--slots", type=int, default=_env("CARRY_SLOTS", 3))
-    ap.add_argument("--leverage", type=float, default=_env("CARRY_LEVERAGE", 1.0))
+    ap.add_argument("--slots", type=int, default=_env("CARRY_SLOTS", DEFAULT_SLOTS))
+    ap.add_argument("--leverage", type=float, default=_env("CARRY_LEVERAGE", DEFAULT_LEVERAGE))
     ap.add_argument("--poll-seconds", type=float, default=_env("CARRY_POLL", 30.0))
     ap.add_argument("--rescan-minutes", type=float, default=_env("CARRY_RESCAN_MIN", 60.0))
     ap.add_argument("--yes-mainnet", action="store_true")
     args = ap.parse_args()
 
-    if ("demo" not in args.venue and "test" not in args.venue) and not args.yes_mainnet:
-        print(f"Refusing real-money venue '{args.venue}' without --yes-mainnet.")
-        return 2
     if args.slots < 2:
         # a single-slot scanner tested NEGATIVE at every leverage: one coin's
         # funding turning is then the entire book
         print("Refusing --slots 1: single-slot carry backtested negative. Use 2 or more.")
         return 2
-    keys = resolve_keys(args.venue)
-    if not keys:
-        prefix = "BYBIT" if args.venue.startswith("bybit") else "BINGX"
-        print(f"set {prefix}_API_KEY and {prefix}_API_SECRET in your environment.")
+    # Config precedence: the encrypted store written by the settings web UI
+    # wins, so the operator can change keys and sizing without touching the
+    # server; a plain .env still works when the store is not in use.
+    runtime = resolve_runtime_config()
+    venue = args.venue if args.venue != DEFAULT_VENUE else runtime["venue"]
+    capital = args.capital if args.capital != DEFAULT_CAPITAL else runtime["capital"]
+    slots = args.slots if args.slots != DEFAULT_SLOTS else runtime["slots"]
+    leverage = args.leverage if args.leverage != DEFAULT_LEVERAGE else runtime["leverage"]
+
+    if ("demo" not in venue and "test" not in venue) and not args.yes_mainnet:
+        print(f"Refusing real-money venue '{venue}' without --yes-mainnet "
+              f"(this venue came from {runtime['source']}).")
+        return 2
+    if slots < 2:
+        print("Refusing fewer than 2 slots: single-slot carry backtested negative.")
         return 2
 
+    keys = (runtime["api_key"], runtime["api_secret"])
+    if not all(keys):
+        keys = resolve_keys(venue) or ("", "")
+    if not all(keys):
+        prefix = "BYBIT" if venue.startswith("bybit") else "BINGX"
+        print(f"no credentials: set them on the dashboard's /settings page, or set "
+              f"{prefix}_API_KEY and {prefix}_API_SECRET in the environment.")
+        return 2
+
+    resolved = argparse.Namespace(venue=venue, capital=capital, slots=slots,
+                                  leverage=leverage)
     log = _logger()
-    pilot = Autopilot(args.venue, keys, args.capital, args.slots, args.leverage, log)
+    log.info("config source: %s", runtime["source"])
+    pilot = Autopilot(venue, keys, capital, slots, leverage, log)
     writer = PortfolioStateWriter()
     started = time.time()
     log.info("AUTOPILOT start: venue=%s capital=%.2f slots=%d leverage=%gx "
-             "-> notional/slot=%.2f", args.venue, args.capital, args.slots,
-             args.leverage, pilot.slot_notional())
+         "-> notional/slot=%.2f", venue, capital, slots, leverage,
+         pilot.slot_notional())
 
     def persist():
         try:
-            writer.update(build_portfolio_snapshot(pilot, args, started))
+            writer.update(build_portfolio_snapshot(pilot, resolved, started))
         except Exception as exc:  # noqa: BLE001 — dashboard must never break trading
             log.warning("state write failed: %s", str(exc)[:100])
 
@@ -239,7 +266,7 @@ def main() -> int:
             now = time.time()
             if now - last_scan >= args.rescan_minutes * 60.0:
                 try:
-                    ranked = pilot.scan(top_n=max(args.slots * 3, 6))
+                    ranked = pilot.scan(top_n=max(slots * 3, 6))
                     if ranked:
                         log.info("scan: " + ", ".join(
                             f"{c.symbol} {c.mean_funding*100:+.4f}%/8h (~{c.ann_pct:+.0f}%/yr)"
