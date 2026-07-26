@@ -28,7 +28,8 @@ class CarryConfig:
     slippage: float = 0.0002
     timed: bool = False        # only hold carry while funding > enter_thr
     enter_thr: float = 0.0     # funding rate threshold to be in the carry (timed mode)
-    leverage: float = 1.0      # notional multiple vs capital (scales yield AND risk)
+    leverage: float = 1.0      # PERP-LEG leverage: reduces the margin posted, it does
+                               # NOT multiply exposure (the spot leg is paid in full)
     maint_margin: float = 0.9  # perp leg liquidates if its adverse move x L exceeds this
 
 
@@ -39,9 +40,15 @@ def simulate_carry(spot: pd.Series, perp: pd.Series, funding_bar: np.ndarray,
     perp = perp.iloc[:n].to_numpy(dtype=float)
     fb = np.asarray(funding_bar[:n], dtype=float)
     leg_cost = cfg.fee + cfg.slippage           # per leg, per side
+    # Capital honesty: a carry slot ties up the SPOT notional (bought with cash)
+    # plus the perp margin (notional / leverage). With equity normalised to 1.0
+    # = total capital, the tradeable notional per unit capital is L/(L+1) — NOT
+    # L. Leverage on the perp leg only improves capital efficiency from 2x
+    # notional (1x) toward 1x notional, it does not multiply exposure.
     L = cfg.leverage
+    notional_scale = L / (L + 1.0)
 
-    equity = 1.0                # capital; carry runs at L x this notional
+    equity = 1.0                # total capital (spot notional + perp margin)
     funding_total = 0.0
     basis_total = 0.0
     n_funding = 0
@@ -55,13 +62,13 @@ def simulate_carry(spot: pd.Series, perp: pd.Series, funding_bar: np.ndarray,
     def open_carry(i):
         nonlocal in_carry, s0, p0, equity, toggles
         in_carry = True; s0 = spot[i]; p0 = perp[i]
-        equity -= 2 * leg_cost * L       # entry: both legs, at L notional
+        equity -= 2 * leg_cost * notional_scale       # entry: both legs
         toggles += 1
 
     def close_carry(i):
         nonlocal in_carry, equity
         in_carry = False
-        equity -= 2 * leg_cost * L       # exit: both legs
+        equity -= 2 * leg_cost * notional_scale       # exit: both legs
 
     for i in range(n):
         rate = fb[i]
@@ -77,32 +84,32 @@ def simulate_carry(spot: pd.Series, perp: pd.Series, funding_bar: np.ndarray,
                 open_carry(i)
             elif not want and in_carry:
                 basis = (spot[i] / s0 - 1.0) - (perp[i] / p0 - 1.0)
-                equity += basis * L; basis_total += basis * L
+                equity += basis * notional_scale; basis_total += basis * notional_scale
                 close_carry(i)
 
-        # funding accrues to the SHORT perp leg while in carry (scaled by L)
+        # funding accrues to the SHORT perp leg, on the notional we can afford
         if in_carry and rate != 0.0:
-            funding_total += rate * L; equity += rate * L; n_funding += 1
+            funding_total += rate * notional_scale; equity += rate * notional_scale; n_funding += 1
 
         # track perp-leg liquidation distance (short loses when perp rises)
         if in_carry:
             adverse = perp[i] / p0 - 1.0
             max_adverse_perp = max(max_adverse_perp, adverse)
             basis_now = (spot[i] / s0 - 1.0) - (perp[i] / p0 - 1.0)
-            eq_curve.append(equity + basis_now * L)
+            eq_curve.append(equity + basis_now * notional_scale)
         else:
             eq_curve.append(equity)
 
     if in_carry:
         basis = (spot[-1] / s0 - 1.0) - (perp[-1] / p0 - 1.0)
-        equity += basis * L; basis_total += basis * L
+        equity += basis * notional_scale; basis_total += basis * notional_scale
         close_carry(n - 1)
     total_return = equity - 1.0
     years = n / bars_per_year if bars_per_year else 0.0
     annualized = ((1 + total_return) ** (1 / years) - 1) if years > 0 and total_return > -1 else 0.0
     # cross-account liquidation: the isolated perp short can be wiped before the
     # offsetting spot gain is realised, even though the position is delta-neutral.
-    liquidated = (max_adverse_perp * L) >= cfg.maint_margin
+    liquidated = (max_adverse_perp * L) >= cfg.maint_margin  # adverse move vs the 1/L margin
     return {
         "total_return": total_return,
         "annualized": annualized,

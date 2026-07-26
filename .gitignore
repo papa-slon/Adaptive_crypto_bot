@@ -14,3 +14,9 @@ logs/
 deploy/.env
 deploy/logs/
 logs/
+
+# never commit real secrets
+.env
+*.env
+!.env.example
+!deploy/.env.example

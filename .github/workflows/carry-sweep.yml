@@ -28,6 +28,8 @@ jobs:
         run: python -m algo_engine.scripts.run_carry
       - name: Run carry across regimes & leverage
         run: python -m algo_engine.scripts.run_carry_regimes
+      - name: Portfolio carry with the funding scanner (multi-coin rotation)
+        run: python -m algo_engine.scripts.run_carry_portfolio
       - name: Paper-trade the carry bot (recent, 1x)
         run: python -m algo_engine.carry_bot.run --symbol BTCUSDT --months 8 --leverage 1
       - name: Paper-trade the carry bot (bull window, 3x — exercises margin top-ups)
