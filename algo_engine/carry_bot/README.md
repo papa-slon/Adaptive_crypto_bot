@@ -1,75 +1,84 @@
-# Carry bot — delta-neutral funding harvester (long spot + short perp)
+# Carry bot — delta-neutral funding harvester
 
-The one positive-expectancy construct found in this repo: hold spot, short the
-perp, collect funding. Price risk ~cancels; income is the funding the short
-perp receives every 8h. Yield tracks the funding regime (~1%/yr in a dry
-window, ~10%/yr unleveraged in a high-funding bull — see `../BACKTEST_RESULTS.md`).
+Buy spot, short the same notional of the perp, collect the funding the perp
+market pays every 8h. Price risk cancels between the legs, so the income is the
+funding, not a directional bet. This is the only positive-expectancy construct
+found in this repo (see `../BACKTEST_RESULTS.md` for what did NOT work).
 
-## Paper-trade it on real history (no keys, no risk)
+## Two ways to run it
+
+**Autopilot (default) — the bot picks the coins.** Scans the venue's funding
+rates, ranks them, opens the best payers, rotates when something is clearly
+better. You set capital and slot count; you never pick a symbol.
 
 ```bash
-pip install pandas numpy
-python -m algo_engine.carry_bot.run --symbol BTCUSDT --months 8 --leverage 1
-# a past high-funding window:
-python -m algo_engine.carry_bot.run --symbol BTCUSDT --months 7 --leverage 3 --end-month 2025-02
+export BINGX_API_KEY=...  BINGX_API_SECRET=...
+python -m algo_engine.carry_bot.autopilot --venue bingx-demo --capital 200 --slots 3 --leverage 1
 ```
 
-Real CI paper runs (BTCUSDT):
-- **1x, recent ~8mo:** +1.14% (funding +1.33%, fees 0.20%) — clean hold, 0 margin top-ups.
-- **3x, 2024H2→25 bull:** +1.72%, but **113 margin top-ups then a safe auto-unwind**
-  near perp liquidation. The risk rails protect capital and cap yield — leverage
-  is not free in a rally.
-
-## What the bot does each tick
-
-1. **open** — buy spot notional N, short perp notional N at leverage L (delta ~0).
-2. **collect funding** — credited to the short perp leg on each 8h settlement.
-3. **keep delta neutral** — rebalance if it drifts past a threshold.
-4. **defend the perp leg** — if its margin ratio nears maintenance, top up margin
-   from cash; if it breaches, unwind safely.
-5. **kill-switch** — unwind if account equity draws down past a limit.
-
-All logic is in `bot.py` (pure, venue-injected). `venue.py::PaperVenue` simulates
-spot+perp+funding in-process for tests and paper trading. Unit tests:
-`../tests/test_carry_bot.py`.
-
-## Live on Bybit Demo (real orders, paper money)
-
-Defaults to **Bybit DEMO**; mainnet needs explicit `--mainnet --yes-mainnet`.
+**Single symbol** — when you want one specific coin:
 
 ```bash
-# 1) read-only connectivity + balance check (no orders)
-export BYBIT_API_KEY=...  BYBIT_API_SECRET=...     # Bybit Demo keys
+python -m algo_engine.carry_bot.live --venue bybit-demo --symbol BTCUSDT --notional 50 --leverage 1
+```
+
+Read-only connectivity check first (places no orders):
+
+```bash
 python -m algo_engine.carry_bot.run --venue bybit-demo --symbol BTCUSDT
-
-# 2) live demo loop (REAL demo orders): open carry, collect funding, defend margin
-python -m algo_engine.carry_bot.live --symbol BTCUSDT --notional 20 --leverage 1
-#   --poll-seconds 30     how often to monitor/defend
-#   --max-minutes 120     auto-unwind after N minutes (optional)
-#   Ctrl-C                unwinds cleanly
 ```
 
-It logs every action + a status line to stdout AND `logs/carry_bot.log` — send me
-that file if anything misbehaves.
-
-Safety built in: read-only until trading is explicitly enabled; demo base URL by
-default; aborts if the demo wallet can't fund the carry; best-effort isolated
-margin so top-ups work; near-liquidation auto-unwind + equity drawdown
-kill-switch as backstops. Funding is settled by the exchange (reflected in
-equity/margin) — not applied manually.
-
-Start tiny (e.g. `--notional 20 --leverage 1`), watch a couple of 8h funding
-settlements, then scale. Never run leverage you can't margin-top-up in a rally.
-
-## Monitoring dashboard
-
-The live loop writes `logs/carry_state.json` + `logs/carry_history.jsonl` each
-tick. A zero-dependency dark terminal dashboard renders them:
+## Dashboard
 
 ```bash
-python -m algo_engine.carry_bot.dashboard --port 8080   # open http://localhost:8080
+python -m algo_engine.carry_bot.dashboard --port 8080     # http://localhost:8080
 ```
 
-Shows equity + curve, P&L (abs + %), funding collected, perp margin-ratio gauge,
-both position legs, and a live activity feed; auto-refreshes every 5s. In Docker
-it runs as the `dashboard` service on port 8080 (see `deploy/`).
+Live realised APR (from funding actually booked), equity curve, per-slot table
+(funding rate, ~APR, both legs, margin ratio, hold time) and an activity feed.
+It has **no authentication** — on a public server run it with
+`--host 127.0.0.1` and reach it over an SSH tunnel.
+
+## How capital is used
+
+A carry slot ties up the **spot notional plus the perp margin**:
+
+    capital per slot = notional + notional / leverage
+
+So `--capital 200 --slots 2 --leverage 1` puts 50 USDT of notional on each leg
+of each slot. Leverage on the perp leg improves capital efficiency (2.0x capital
+per unit notional at 1x → 1.2x at 5x) — it does **not** multiply exposure,
+because the spot leg is always paid in full.
+
+## Safety rails (all on by default)
+
+| Rail | What it prevents |
+|---|---|
+| Preflight against real lot size / min qty / min notional | an order rejected for being too small |
+| Transactional open with rollback | a naked, unhedged leg if the second order fails |
+| Adopt-on-restart | a restarted container opening a *second* position |
+| Sells only what the bot bought | ever touching coins you already held |
+| Leverage-aware margin top-ups | self-deleveraging at high leverage, and liquidation |
+| Refuses unrunnable leverage | posting margin too close to the maintenance ratio |
+| Drawdown kill-switch | an unbounded loss in a bad funding regime |
+| Anti-churn rotation | the fee trap of switching coins on every wobble |
+| Demo endpoints by default | pointing at real money by accident |
+
+## Selection rules (scanner)
+
+A coin is a candidate only if its trailing funding is **positive** (we are short
+the perp, so longs must be paying us), it has enough observed settlements, and
+its funding is not a one-off spike (`std/mean` capped). Ranking is
+stability-weighted, so a steady 0.01% beats a lottery ticket with the same mean.
+The same `rank_candidates` runs in the backtest and live, so what is measured is
+what is traded.
+
+## Validation status
+
+- Bybit adapter: signing verified offline against a reference HMAC; order
+  payloads inspected. **Not** exercised against the live venue from here.
+- BingX adapter: written without network access — see the module docstring for
+  the exact response fields to confirm on the first VST/demo run.
+- Everything else: 62 offline tests.
+
+Start on demo, 1x, small capital. Watch a couple of 8h settlements before scaling.
